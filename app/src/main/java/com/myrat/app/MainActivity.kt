@@ -28,6 +28,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var deviceRef: com.google.firebase.database.DatabaseReference
     private var doubleBackToExitPressedOnce = false
     private val handler = Handler(Looper.getMainLooper())
+    private var permissionsRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -71,19 +72,24 @@ class MainActivity : AppCompatActivity() {
             }
 
             checkAndCreateDeviceNode()
-            Logger.log("Requesting permissions via PermissionHandler...")
             
-            // Add delay before requesting permissions to ensure everything is initialized
-            handler.postDelayed({
-                try {
-                    if (!isFinishing && !isDestroyed) {
-                        permissionHandler?.requestPermissions()
+            // Only request permissions once
+            if (!permissionsRequested) {
+                Logger.log("Requesting permissions via PermissionHandler...")
+                
+                // Add delay before requesting permissions to ensure everything is initialized
+                handler.postDelayed({
+                    try {
+                        if (!isFinishing && !isDestroyed) {
+                            permissionHandler?.requestPermissions()
+                            permissionsRequested = true
+                        }
+                    } catch (e: Exception) {
+                        Logger.error("Failed to request permissions", e)
+                        Toast.makeText(this, "Permission request failed", Toast.LENGTH_SHORT).show()
                     }
-                } catch (e: Exception) {
-                    Logger.error("Failed to request permissions", e)
-                    Toast.makeText(this, "Permission request failed", Toast.LENGTH_SHORT).show()
-                }
-            }, 1500)
+                }, 1000) // Reduced delay
+            }
             
         } catch (e: Exception) {
             Logger.error("Critical error in onCreate", e)
@@ -143,21 +149,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        Logger.log("onRequestPermissionsResult called")
-        
-        try {
-            // Permission results are handled by the ActivityResultLauncher in PermissionHandler
-        } catch (e: Exception) {
-            Logger.error("Error in onRequestPermissionsResult", e)
-        }
-    }
-
     override fun onResume() {
         super.onResume()
         Logger.log("MainActivity onResume")
@@ -169,9 +160,13 @@ class MainActivity : AppCompatActivity() {
         
         try {
             permissionHandler?.handleResume()
-            checkAndOpenPhoneSettings()
+            
+            // Only check and open phone settings if permissions are granted
+            if (permissionHandler?.areAllPermissionsGranted() == true) {
+                checkAndOpenPhoneSettings()
+            }
         } catch (e: Exception) {
-            Logger.error("Crash in onResume: ${e.message}", e)
+            Logger.error("Error in onResume: ${e.message}", e)
             Toast.makeText(this, "Error in onResume: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
