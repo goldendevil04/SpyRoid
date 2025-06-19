@@ -1,0 +1,307 @@
+body {
+  background: linear-gradient(to bottom, #000, #111);
+  margin: 0;
+}
+
+.phone-terminal {
+  width: 100%;
+  max-width: 600px;
+  margin: 20px auto;
+  background: #000;
+  color: #0f0;
+  padding: 1.5rem;
+  border-radius: 16px;
+  box-shadow: 0 0 20px rgba(0, 255, 0, 0.3);
+}
+
+.status-bar {
+  display: flex;
+  justify-content: space-between;
+  font-size: 1rem;
+  margin-bottom: 0.8rem;
+}
+
+.back-button {
+  background: transparent;
+  color: #0f0;
+  border: none;
+  font-size: 1.2rem;
+  cursor: pointer;
+  margin-bottom: 1.2rem;
+  padding: 5px 10px;
+}
+
+.back-button:hover {
+  color: #00cc00;
+  text-shadow: 0 0 5px rgba(0, 204, 0, 0.7);
+}
+
+.device-select-terminal {
+  width: 100%;
+  background: #111;
+  color: #0f0;
+  padding: 0.8rem;
+  margin-bottom: 1.2rem;
+  border: 1px solid #0f0;
+  border-radius: 8px;
+  font-size: 1.1rem;
+}
+
+.terminal-input {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.terminal-input input {
+  background: #000 !important;
+  color: #0f0;
+  border: 1px solid #0f0;
+  padding: 0.8rem;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.terminal-input input:focus {
+  background: #000 !important;
+  outline: none;
+  border-color: #0f0;
+  box-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+.terminal-input button {
+  background: #0f0;
+  color: #000;
+  border: none;
+  padding: 0.8rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: bold;
+  font-size: 1.1rem;
+  transition: all 0.2s ease;
+}
+
+.terminal-input button:hover {
+  background: #00cc00;
+  transform: translateY(-2px);
+}
+
+.terminal-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.toggle-command-list,
+.fetch-app-list,
+.toggle-app-list {
+  padding: 8px 12px;
+  background-color: #121212;
+  color: #0f0;
+  border: 1px solid #0f0;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+}
+
+.toggle-command-list:hover,
+.fetch-app-list:hover,
+.toggle-app-list:hover {
+  background-color: #00cc00;
+  color: #000;
+  transform: translateY(-2px);
+}
+
+.toggle-command-list:disabled,
+.fetch-app-list:disabled,
+.toggle-app-list:disabled {
+  background-color: #333;
+  color: #666;
+  border-color: #666;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.command-list,
+.app-list {
+  background-color: #1e1e1e;
+  color: #0f0;
+  padding: 15px;
+  border-radius: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 1rem;
+  border: 1px solid #0f0;
+  margin-top: 1.2rem;
+}
+
+.command-list ul,
+.app-list ul {
+  list-style-type: none;
+  padding: 0;
+  margin: 0;
+}
+
+.command-list li,
+.app-list li {
+  padding: 10px;
+  border-bottom: 1px solid #444;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.command-list li:last-child,
+.app-list li:last-child {
+  border-bottom: none;
+}
+
+.command-list button,
+.app-list button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.delete-button {
+  color: red;
+}
+
+.delete-button:hover {
+  color: #cc0000;
+}
+
+.open-app-button {
+  color: #0f0;
+}
+
+.open-app-button:hover {
+  color: #00cc00;
+}
+
+.terminal-output {
+  margin-top: 1.5rem;
+}
+
+.terminal-output pre {
+  background: #111;
+  color: #0f0;
+  padding: 1.2rem;
+  border-radius: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  border: 1px solid #0f0;
+  font-size: 1rem;
+}
+
+.status-indicator {
+  font-weight: bold;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 1rem;
+  margin-left: 12px;
+}
+
+.status-indicator.online {
+  background-color: #d4f4d7;
+  color: #2e7d32;
+}
+
+.status-indicator.offline {
+  background-color: #f8d7da;
+  color: #b71c1c;
+}
+
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 15px;
+}
+
+.error-message {
+  color: red;
+  margin-bottom: 10px;
+  font-size: 1rem;
+}
+
+/* Media queries for responsive design */
+@media (max-width: 768px) {
+  .phone-terminal {
+    max-width: 100%;
+    margin: 10px;
+    padding: 1rem;
+  }
+
+  .terminal-output pre {
+    max-height: 300px;
+  }
+
+  .terminal-buttons {
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 480px) {
+  body {
+    padding: 10px;
+  }
+
+  .status-bar {
+    font-size: 0.9rem;
+  }
+
+  .terminal-input input,
+  .terminal-input button,
+  .device-select-terminal,
+  .toggle-command-list,
+  .fetch-app-list,
+  .toggle-app-list {
+    padding: 0.6rem;
+    font-size: 0.9rem;
+  }
+
+  .command-list,
+  .app-list {
+    font-size: 0.9rem;
+  }
+}
+.app-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.app-filter label {
+  color: #0f0;
+  font-size: 0.9rem;
+}
+
+.app-filter-select {
+  background: #111;
+  color: #0f0;
+  border: 1px solid #0f0;
+  padding: 8px;
+  border-radius: 5px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.app-filter-select:disabled {
+  background: #333;
+  color: #666;
+  border-color: #666;
+  cursor: not-allowed;
+}
+
+.app-filter-select:focus {
+  outline: none;
+  box-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}

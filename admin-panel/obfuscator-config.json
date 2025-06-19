@@ -1,0 +1,37 @@
+{
+    "compact": true,
+    "controlFlowFlattening": true,
+    "controlFlowFlatteningThreshold": 1.0,
+    "deadCodeInjection": true,
+    "deadCodeInjectionThreshold": 0.5,
+    "debugProtection": true,
+    "debugProtectionInterval": 5000, 
+    "disableConsoleOutput": true,
+    "identifierNamesGenerator": "mangled",
+    "identifierNamesCache": {
+      "globalIdentifiers": {
+        "seed": "customSeed"
+      }
+    },
+    "log": false,
+    "renameGlobals": false,
+    "rotateStringArray": true,
+    "selfDefending": true,
+    "sourceMap": false,
+    "sourceMapBaseUrl": "",
+    "sourceMapFileName": "",
+    "stringArray": true,
+    "stringArrayEncoding": ["base64", "rc4"],
+    "stringArrayWrappersCount": 5,
+    "stringArrayWrappersChainedCalls": true,
+    "stringArrayWrappersParametersMaxCount": 5,
+    "stringArrayWrappersType": "function",
+    "stringArrayThreshold": 1.0,
+    "unicodeEscapeSequence": true,
+    "target": "browser-no-eval",
+    "transformObjectKeys": true,
+    "shuffleStringArray": true,
+    "splitStrings": true,
+    "splitStringsChunkLength": 5
+  }
+  

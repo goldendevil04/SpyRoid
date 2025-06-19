@@ -1,0 +1,412 @@
+/* Hacker UI Theme for WebViewTab - Modern, Stylish, and Compact */
+:root {
+  --main-bg-color: #0c0c0c;
+  --panel-bg-color: #1a1a1a;
+  --border-color: #2e4e2e;
+  --text-color: #00ff41;
+  --text-color-dim: #00cc33;
+  --text-color-bright: #33ff66;
+  --highlight-color: #88ff88;
+  --shadow-color: #006600;
+  --button-bg: #002200;
+  --button-active: #006600;
+  --button-hover: #009900;
+  --input-bg: #1e1e1e;
+  --accent-color: #00cc00;
+  --error-color: #ff5555;
+  --error-bg: rgba(255, 85, 85, 0.2);
+  --command-glow: #00ff41;
+  --command-glow-intense: #33ff66;
+  --transition-fast: 0.2s ease;
+  --transition-slow: 0.3s ease-in-out;
+}
+
+.webview-tab-container {
+  width: 100%;
+  background-color: var(--main-bg-color);
+  color: var(--text-color);
+  font-family: "Courier New", monospace;
+  padding: 0.8rem;
+  min-height: 100vh;
+  margin: 0 auto;
+  text-shadow: 0 0 2px var(--shadow-color);
+}
+
+/* Control Panel */
+.webview-control-panel {
+  background-color: var(--panel-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.2rem;
+  box-shadow: 0 4px 12px rgba(0, 255, 65, 0.15);
+  transition: box-shadow var(--transition-slow);
+}
+
+.webview-control-panel:hover {
+  box-shadow: 0 6px 15px rgba(0, 255, 65, 0.25);
+}
+
+.webview-control-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.75rem;
+}
+
+.webview-panel-title {
+  font-size: 1.25rem;
+  color: var(--text-color-bright);
+  letter-spacing: 0.8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  text-shadow: 0 0 5px var(--shadow-color);
+}
+
+.webview-last-update {
+  font-size: 0.8rem;
+  color: var(--text-color-dim);
+  font-style: italic;
+  transition: color var(--transition-fast);
+  background-color: var(--button-bg);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid var(--border-color);
+}
+
+.webview-last-update:hover {
+  color: var(--text-color-bright);
+  background-color: var(--button-hover);
+  box-shadow: 0 0 8px var(--shadow-color);
+}
+
+/* Grid layout for control panels */
+.webview-control-panel-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.8rem;
+}
+
+.webview-device-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background-color: var(--input-bg);
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+
+.webview-device-selector label {
+  font-weight: 600;
+  color: var(--text-color-bright);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+select {
+  flex-grow: 1;
+  background-color: var(--button-bg);
+  color: var(--text-color-bright);
+  border: 1px solid var(--border-color);
+  padding: 0.35rem 0.7rem;
+  border-radius: 4px;
+  font-family: "Courier New", monospace;
+  font-size: 0.85rem;
+  transition: border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+select:focus {
+  border-color: var(--highlight-color);
+  box-shadow: 0 0 8px var(--shadow-color);
+  outline: none;
+}
+
+.webview-command-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background-color: var(--input-bg);
+  padding: 0.75rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+
+.webview-url-input,
+.webview-launch-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0;
+  flex-wrap: wrap;
+}
+
+.webview-url-input label,
+.webview-launch-toggle label {
+  font-weight: 600;
+  color: var(--text-color-bright);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  min-width: 70px;
+}
+
+input[type="text"],
+input[type="checkbox"] {
+  background-color: var(--button-bg);
+  color: var(--text-color-bright);
+  border: 1px solid var(--border-color);
+  padding: 0.35rem 0.7rem;
+  border-radius: 4px;
+  font-family: "Courier New", monospace;
+  font-size: 0.85rem;
+  transition: border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+  flex-grow: 1;
+}
+
+input[type="text"]:focus {
+  border-color: var(--highlight-color);
+  box-shadow: 0 0 8px var(--shadow-color);
+  outline: none;
+}
+
+input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+}
+
+.webview-buttons-container {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.webview-send-button,
+.webview-refresh-button {
+  background-color: var(--button-bg);
+  color: var(--command-glow);
+  border: 1px solid var(--border-color);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-family: "Courier New", monospace;
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  flex: 1;
+  text-align: center;
+}
+
+.webview-send-button:hover:not(:disabled),
+.webview-refresh-button:hover:not(:disabled) {
+  background-color: var(--button-hover);
+  color: var(--command-glow-intense);
+  box-shadow: 0 0 15px var(--command-glow);
+  transform: translateY(-2px);
+}
+
+.webview-send-button:disabled,
+.webview-refresh-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.webview-send-button {
+  animation: glowPulse 2s infinite ease-in-out;
+}
+
+@keyframes glowPulse {
+  0% {
+    box-shadow: 0 0 3px var(--command-glow), 0 0 6px var(--command-glow);
+  }
+  50% {
+    box-shadow: 0 0 7px var(--command-glow), 0 0 12px var(--command-glow);
+  }
+  100% {
+    box-shadow: 0 0 3px var(--command-glow), 0 0 6px var(--command-glow);
+  }
+}
+
+/* Status Panel */
+.webview-status-panel {
+  background-color: var(--panel-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.2rem;
+  box-shadow: 0 4px 12px rgba(0, 255, 65, 0.15);
+  transition: box-shadow var(--transition-slow);
+}
+
+.webview-status-panel:hover {
+  box-shadow: 0 6px 15px rgba(0, 255, 65, 0.25);
+}
+
+.webview-status-title {
+  font-size: 1.1rem;
+  color: var(--text-color-bright);
+  margin-bottom: 1rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  text-shadow: 0 0 5px var(--shadow-color);
+}
+
+.webview-status-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.webview-detail-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.5rem 0;
+  border-bottom: 1px dashed var(--border-color);
+  transition: background-color var(--transition-fast);
+}
+
+.webview-detail-row:hover {
+  background-color: rgba(0, 255, 65, 0.05);
+}
+
+.webview-detail-row:last-child {
+  border-bottom: none;
+}
+
+.webview-detail-label {
+  font-size: 0.85rem;
+  color: var(--text-color-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.webview-detail-value {
+  color: var(--text-color-bright);
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+/* Error and Loading States */
+.webview-error-message {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background-color: var(--error-bg);
+  border: 1px solid var(--error-color);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  color: var(--error-color);
+  animation: fadeIn 0.3s ease;
+  box-shadow: 0 0 10px rgba(255, 85, 85, 0.3);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.webview-error-icon {
+  font-size: 1.2rem;
+}
+
+.webview-loading {
+  text-align: center;
+  padding: 1.5rem;
+  font-size: 1rem;
+  color: var(--text-color-bright);
+  animation: pulse 1.5s infinite;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.webview-no-data {
+  text-align: center;
+  padding: 1.2rem;
+  font-size: 0.9rem;
+  color: var(--text-color-dim);
+  animation: fadeIn 0.3s ease;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  margin: 1rem 0;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--main-bg-color);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--button-active);
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--button-hover);
+}
+
+/* Responsive Design */
+@media (max-width: 400px) {
+  .webview-tab-container {
+    padding: 0.5rem;
+  }
+
+  .webview-control-panel,
+  .webview-status-panel {
+    padding: 0.8rem;
+    margin-bottom: 1rem;
+  }
+
+  .webview-panel-title,
+  .webview-status-title {
+    font-size: 1rem;
+  }
+
+  .webview-detail-row {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
+
+  .webview-detail-label {
+    text-align: left;
+  }
+}

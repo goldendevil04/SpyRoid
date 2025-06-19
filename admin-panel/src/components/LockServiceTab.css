@@ -1,0 +1,381 @@
+/* Hacker UI Theme for LockServiceTab - Modern, Stylish, and Compact */
+:root {
+  --main-bg-color: #0c0c0c;
+  --panel-bg-color: #1a1a1a;
+  --border-color: #2e4e2e;
+  --text-color: #00ff41;
+  --text-color-dim: #00cc33;
+  --text-color-bright: #33ff66;
+  --highlight-color: #88ff88;
+  --shadow-color: #006600;
+  --button-bg: #002200;
+  --button-active: #006600;
+  --button-hover: #009900;
+  --input-bg: #1e1e1e;
+  --accent-color: #00cc00;
+  --error-color: #ff5555;
+  --error-bg: rgba(255, 85, 85, 0.2);
+  --lock-glow: #00ff41;
+  --lock-glow-intense: #33ff66;
+  --transition-fast: 0.2s ease;
+  --transition-slow: 0.3s ease-in-out;
+  --status-color: #33ff66;
+  --success-bg: rgba(0, 255, 65, 0.2);
+  --error-status-bg: rgba(255, 85, 85, 0.3);
+}
+
+.lock-service-tab {
+  width: 100%;
+  background-color: var(--main-bg-color);
+  color: var(--text-color);
+  font-family: "Courier New", monospace;
+  padding: 1rem;
+  min-height: 100vh;
+  margin: 0 auto;
+  text-shadow: 0 0 2px var(--shadow-color);
+}
+
+/* Warnings Section */
+.lock-warnings {
+  background-color: var(--error-bg);
+  border: 1px solid var(--error-color);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 0 10px rgba(255, 85, 85, 0.3);
+  animation: fadeIn 0.3s ease;
+}
+
+.lock-warnings h3 {
+  font-size: 1rem;
+  color: var(--error-color);
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.lock-warnings ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.lock-warnings li {
+  font-size: 0.85rem;
+  color: var(--error-color);
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lock-warnings li::before {
+  content: "⚠";
+  font-size: 1rem;
+}
+
+/* Device Selection */
+.lock-device-selection {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background-color: var(--input-bg);
+  padding: 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  margin-bottom: 1.2rem;
+}
+
+.lock-device-selection label {
+  font-weight: 600;
+  color: var(--text-color-bright);
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+select {
+  flex-grow: 1;
+  background-color: var(--button-bg);
+  color: var(--text-color-bright);
+  border: 1px solid var(--border-color);
+  padding: 0.35rem 0.7rem;
+  border-radius: 4px;
+  font-family: "Courier New", monospace;
+  font-size: 0.85rem;
+  transition: border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+select:focus {
+  border-color: var(--highlight-color);
+  box-shadow: 0 0 8px var(--shadow-color);
+  outline: none;
+}
+
+/* Device Info */
+.lock-device-info {
+  background-color: var(--panel-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.2rem;
+  box-shadow: 0 4px 12px rgba(0, 255, 65, 0.15);
+  transition: box-shadow var(--transition-slow);
+}
+
+.lock-device-info:hover {
+  box-shadow: 0 6px 15px rgba(0, 255, 65, 0.25);
+}
+
+.lock-device-info h3 {
+  font-size: 1.1rem;
+  color: var(--text-color-bright);
+  margin-bottom: 1rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  text-shadow: 0 0 5px var(--shadow-color);
+}
+
+.lock-device-info p {
+  font-size: 0.9rem;
+  color: var(--text-color);
+  margin: 0.5rem 0;
+  display: flex;
+  justify-content: space-between;
+}
+
+.lock-device-info p span:first-child {
+  font-weight: 600;
+  color: var(--text-color-dim);
+  text-transform: uppercase;
+}
+
+.lock-device-info p span:last-child {
+  color: var(--text-color-bright);
+}
+
+/* Controls Section */
+.lock-controls {
+  background-color: var(--panel-bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: 0 4px 12px rgba(0, 255, 65, 0.15);
+  transition: box-shadow var(--transition-slow);
+}
+
+.lock-controls:hover {
+  box-shadow: 0 6px 15px rgba(0, 255, 65, 0.25);
+}
+
+.lock-controls h3 {
+  font-size: 1.1rem;
+  color: var(--text-color-bright);
+  margin-bottom: 1rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  text-shadow: 0 0 5px var(--shadow-color);
+}
+
+.lock-button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+/* Action Buttons */
+.lock-button {
+  position: relative;
+  background-color: var(--button-bg);
+  color: var(--lock-glow);
+  border: 1px solid var(--lock-glow);
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  font-family: "Courier New", monospace;
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  overflow: hidden;
+  transition: all var(--transition-fast);
+  animation: glowPulse 2s infinite ease-in-out;
+  flex: 1;
+  min-width: 140px;
+  max-width: 200px;
+  text-align: 舎center;
+}
+
+.lock-button:hover:not(:disabled) {
+  background-color: var(--button-hover);
+  color: var(--lock-glow-intense);
+  box-shadow: 0 0 15px var(--lock-glow), 0 0 20px var(--lock-glow);
+  transform: translateY(-2px);
+}
+
+.lock-button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+  animation: none;
+}
+
+.lock-button::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(0, 255, 65, 0.2),
+    transparent
+  );
+  transition: left 0.4s ease;
+}
+
+.lock-button:hover:not(:disabled)::before {
+  left: 100%;
+}
+
+@keyframes glowPulse {
+  0% {
+    box-shadow: 0 0 3px var(--lock-glow), 0 0 6px var(--lock-glow);
+  }
+  50% {
+    box-shadow: 0 0 7px var(--lock-glow), 0 0 12px var(--lock-glow);
+  }
+  100% {
+    box-shadow: 0 0 3px var(--lock-glow), 0 0 6px var(--lock-glow);
+  }
+}
+
+/* Button Status Styling */
+.lock-button[data-status="success"] {
+  background-color: var(--success-bg);
+  border-color: var(--status-color);
+  color: var(--status-color);
+  animation: none;
+}
+
+.lock-button[data-status="failed"],
+.lock-button[data-status="error"] {
+  background-color: var(--error-status-bg);
+  border-color: var(--error-color);
+  color: var(--error-color);
+  animation: none;
+}
+
+.lock-button[data-status="sending"],
+.lock-button[data-status="pending"] {
+  background-color: var(--button-active);
+  color: var(--text-color-bright);
+  animation: pulse 1.5s infinite;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--main-bg-color);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--button-active);
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--button-hover);
+}
+
+/* Responsive Design */
+@media (max-width: 600px) {
+  .lock-service-tab {
+    padding: 0.5rem;
+  }
+
+  .lock-device-info,
+  .lock-controls {
+    padding: 0.8rem;
+    margin-bottom: 1rem;
+  }
+
+  .lock-device-info h3,
+  .lock-controls h3 {
+    font-size: 1rem;
+  }
+
+  .lock-button-group {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .lock-button {
+    min-width: 100%;
+    max-width: none;
+    padding: 0.6rem;
+    font-size: 0.85rem;
+  }
+
+  .lock-device-selection {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  select {
+    width: 100%;
+  }
+}
+
+@media (max-width: 400px) {
+  .lock-device-info p {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.2rem;
+  }
+
+  .lock-device-info p span:first-child {
+    font-size: 0.8rem;
+  }
+
+  .lock-warnings li {
+    font-size: 0.8rem;
+  }
+}

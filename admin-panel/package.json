@@ -1,0 +1,48 @@
+{
+  "name": "sms-admin-panel",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@testing-library/dom": "^10.4.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@testing-library/user-event": "^13.5.0",
+    "firebase": "^11.8.1",
+    "javascript-obfuscator": "^4.1.1",
+    "leaflet": "^1.9.4",
+    "novnc": "^1.2.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "react-leaflet": "^5.0.0",
+    "react-router-dom": "^7.4.1",
+    "react-scripts": "5.0.1",
+    "web-vitals": "^2.1.4"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "obfuscate": "javascript-obfuscator build --output build-obfuscated --config obfuscator-config.json",
+    "replace-files": "cp -r build-obfuscated/* build/",
+    "buildEncode": "npm run build && npm run obfuscate && npm run replace-files && rm -rf build-obfuscated",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}
