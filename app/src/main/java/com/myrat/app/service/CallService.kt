@@ -29,16 +29,19 @@ class CallService : Service() {
     }
 
     private val sentCallTracker = mutableMapOf<String, MutableSet<String>>()
+    private lateinit var deviceId: String
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         try {
+            deviceId = MainActivity.getDeviceId(this)
             createNotificationChannel()
             val notification = buildForegroundNotification()
             startForeground(NOTIFICATION_ID, notification)
             scheduleRestart(this)
+            Logger.log("CallService created successfully for device: $deviceId")
         } catch (e: Exception) {
             Logger.error("Failed to initialize CallService", e)
             stopSelf()
@@ -46,14 +49,18 @@ class CallService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val deviceId = MainActivity.getDeviceId(this)
-        if (deviceId == null) {
-            Logger.error("Device ID is null, stopping CallService")
-            stopSelf()
+        try {
+            if (deviceId.isEmpty()) {
+                Logger.error("Device ID is empty, stopping CallService")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            listenForCallCommands(deviceId)
+            return START_STICKY
+        } catch (e: Exception) {
+            Logger.error("Failed to start CallService", e)
             return START_NOT_STICKY
         }
-        listenForCallCommands(deviceId)
-        return START_STICKY
     }
 
     private fun scheduleRestart(context: Context) {
@@ -87,7 +94,7 @@ class CallService : Service() {
                 val notificationManager = getSystemService(NotificationManager::class.java)
                 notificationManager.createNotificationChannel(channel)
             } catch (e: Exception) {
-                Logger.error("Failed to create notification channel", e)
+                Logger.error("Failed to create call notification channel", e)
             }
         }
     }
@@ -96,13 +103,13 @@ class CallService : Service() {
         return try {
             NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Call Service")
-                .setContentText("Running in background")
-                .setSmallIcon(android.R.drawable.ic_notification_clear_all)
+                .setContentText("Monitoring call commands")
+                .setSmallIcon(android.R.drawable.ic_menu_call)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setOngoing(true)
                 .build()
         } catch (e: Exception) {
-            Logger.error("Failed to build foreground notification", e)
+            Logger.error("Failed to build call notification", e)
             NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Call Service")
                 .setContentText("Running in background")
@@ -113,13 +120,18 @@ class CallService : Service() {
     }
 
     private fun isNetworkAvailable(): Boolean {
-        val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = connectivityManager.activeNetwork
-        val capabilities = connectivityManager.getNetworkCapabilities(network)
-        return capabilities != null && (
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                        capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-                )
+        return try {
+            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = connectivityManager.activeNetwork
+            val capabilities = connectivityManager.getNetworkCapabilities(network)
+            capabilities != null && (
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                    )
+        } catch (e: Exception) {
+            Logger.error("Error checking network availability", e)
+            false
+        }
     }
 
     private fun listenForCallCommands(deviceId: String) {
@@ -129,62 +141,56 @@ class CallService : Service() {
             return
         }
 
-        val commandsRef = Firebase.database.getReference("Device").child(deviceId).child("call_commands")
+        try {
+            val commandsRef = Firebase.database.getReference("Device").child(deviceId).child("call_commands")
 
-        commandsRef.addValueEventListener(object : ValueEventListener {
-            override fun onDataChange(snapshot: DataSnapshot) {
-                snapshot.children.forEach { commandSnapshot ->
+            commandsRef.addValueEventListener(object : ValueEventListener {
+                override fun onDataChange(snapshot: DataSnapshot) {
                     try {
-                        val command = commandSnapshot.value as? Map<*, *> ?: run {
-                            Logger.error("Invalid command data for ${commandSnapshot.key}")
-                            return@forEach
-                        }
-                        val status = command["status"] as? String
-                        val simNumber = command["sim_number"] as? String
-                        val recipient = command["recipient"] as? String
-
-                        if (status != "pending") {
-                            Logger.log("Skipping command ${commandSnapshot.key} with status $status")
-                            return@forEach
-                        }
-                        if (simNumber.isNullOrBlank() || recipient.isNullOrBlank()) {
-                            Logger.error("Invalid call command data for command ${commandSnapshot.key}: sim_number=$simNumber, recipient=$recipient")
-                            commandSnapshot.key?.let {
-                                updateCommandStatus(it, "failed", "Invalid sim_number or recipient")
+                        snapshot.children.forEach { commandSnapshot ->
+                            val command = commandSnapshot.value as? Map<*, *> ?: run {
+                                Logger.error("Invalid command data for ${commandSnapshot.key}")
+                                return@forEach
                             }
-                            return@forEach
+                            val status = command["status"] as? String
+                            val simNumber = command["sim_number"] as? String
+                            val recipient = command["recipient"] as? String
+                            val commandId = commandSnapshot.key ?: return@forEach
+
+                            if (status != "pending") {
+                                Logger.log("Skipping command $commandId with status $status")
+                                return@forEach
+                            }
+                            if (simNumber.isNullOrBlank() || recipient.isNullOrBlank()) {
+                                Logger.error("Invalid call command data for command $commandId: sim_number=$simNumber, recipient=$recipient")
+                                updateCommandStatus(commandId, "failed", "Invalid sim_number or recipient")
+                                return@forEach
+                            }
+                            Logger.log("Processing call command: $commandId from $simNumber to $recipient")
+                            initiateCall(simNumber, recipient, commandId)
                         }
-                        initiateCall(simNumber, recipient, commandSnapshot.key!!)
                     } catch (e: Exception) {
-                        Logger.error("Error processing command ${commandSnapshot.key}", e)
-                        commandSnapshot.key?.let {
-                            updateCommandStatus(it, "failed", "Processing error: ${e.message}")
-                        }
+                        Logger.error("Error processing call commands", e)
                     }
                 }
-            }
 
-            override fun onCancelled(error: DatabaseError) {
-                Logger.error("Call commands database error: ${error.message}", error.toException())
-            }
-        })
+                override fun onCancelled(error: DatabaseError) {
+                    Logger.error("Call commands database error: ${error.message}", error.toException())
+                }
+            })
+        } catch (e: Exception) {
+            Logger.error("Failed to listen for call commands", e)
+        }
     }
 
     private fun initiateCall(simNumber: String, recipient: String, commandId: String) {
-        val deviceId = MainActivity.getDeviceId(this) ?: run {
-            Logger.error("Device ID is null, cannot initiate call")
-            updateCommandStatus(commandId, "failed", "Device ID is null")
-            return
-        }
-        val commandRef = Firebase.database.getReference("Device/$deviceId/call_commands/$commandId")
-
-        val alreadySentSet = sentCallTracker.getOrPut(commandId) { mutableSetOf() }
-        if (alreadySentSet.contains(recipient)) {
-            Logger.log("Skipping duplicate call to $recipient for command $commandId")
-            return
-        }
-
         try {
+            val alreadySentSet = sentCallTracker.getOrPut(commandId) { mutableSetOf() }
+            if (alreadySentSet.contains(recipient)) {
+                Logger.log("Skipping duplicate call to $recipient for command $commandId")
+                return
+            }
+
             // Check permissions
             val hasCallPhonePermission = ContextCompat.checkSelfPermission(
                 this, Manifest.permission.CALL_PHONE
@@ -217,27 +223,19 @@ class CallService : Service() {
                 return
             }
 
-            val slotMap = mutableMapOf<String, Int>()
-            subscriptionInfoList.forEachIndexed { index, info ->
-                val simSlot = "sim${index + 1}"
-                slotMap[simSlot] = info.simSlotIndex
+            // Find the correct subscription
+            val subscriptionInfo = subscriptionInfoList.find { info ->
+                info.number == simNumber || "sim${info.simSlotIndex + 1}" == simNumber.lowercase()
             }
 
-            if (!slotMap.containsKey(simNumber.lowercase())) {
-                Logger.error("Invalid sim_number: $simNumber, expected one of ${slotMap.keys}")
-                updateCommandStatus(commandId, "failed", "Invalid sim_number: $simNumber")
-                return
-            }
-
-            val simSlotIndex = slotMap[simNumber.lowercase()]!!
-            val subscriptionInfo = subscriptionInfoList.find { it.simSlotIndex == simSlotIndex }
             if (subscriptionInfo == null) {
-                Logger.error("No SIM found in slot $simSlotIndex for simNumber: $simNumber")
-                updateCommandStatus(commandId, "failed", "No SIM found in slot $simSlotIndex")
+                Logger.error("No SIM found for simNumber: $simNumber")
+                updateCommandStatus(commandId, "failed", "No SIM found for: $simNumber")
                 return
             }
 
             val subId = subscriptionInfo.subscriptionId
+            val simSlotIndex = subscriptionInfo.simSlotIndex
             Logger.log("Mapped $simNumber to subscriptionId: $subId (slot: $simSlotIndex)")
 
             val intent = Intent(this, LauncherActivity::class.java).apply {
@@ -267,9 +265,9 @@ class CallService : Service() {
     }
 
     private fun showUnlockNotification() {
-        val channelId = "CallServiceAlerts"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
+        try {
+            val channelId = "CallServiceAlerts"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
                     channelId,
                     "Call Service Alerts",
@@ -277,16 +275,12 @@ class CallService : Service() {
                 )
                 val manager = getSystemService(NotificationManager::class.java)
                 manager.createNotificationChannel(channel)
-            } catch (e: Exception) {
-                Logger.error("Failed to create unlock notification channel", e)
             }
-        }
 
-        try {
             val notification = NotificationCompat.Builder(this, channelId)
                 .setContentTitle("Action Required")
                 .setContentText("Please unlock your device to make a call.")
-                .setSmallIcon(android.R.drawable.ic_notification_clear_all)
+                .setSmallIcon(android.R.drawable.ic_menu_call)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .build()
 
@@ -298,30 +292,34 @@ class CallService : Service() {
     }
 
     private fun updateCommandStatus(commandId: String, status: String, error: String?) {
-        val deviceId = MainActivity.getDeviceId(this) ?: return
-        val commandRef = Firebase.database.getReference("Device/$deviceId/call_commands/$commandId")
-        val updates = mutableMapOf<String, Any?>(
-            "status" to status
-        )
-        if (error != null) {
-            updates["error"] = error
-        }
-        commandRef.updateChildren(updates)
-            .addOnSuccessListener {
-                Logger.log("Updated call command $commandId to status $status")
-                if (status == "success" || status == "failed") {
-                    commandRef.removeValue()
-                        .addOnSuccessListener {
-                            Logger.log("Removed call command $commandId")
-                            sentCallTracker.remove(commandId)
-                        }
-                        .addOnFailureListener { e ->
-                            Logger.error("Failed to remove command: ${e.message}", e)
-                        }
+        try {
+            val commandRef = Firebase.database.getReference("Device/$deviceId/call_commands/$commandId")
+            val updates = mutableMapOf<String, Any?>(
+                "status" to status,
+                "timestamp" to System.currentTimeMillis()
+            )
+            if (error != null) {
+                updates["error"] = error
+            }
+            commandRef.updateChildren(updates)
+                .addOnSuccessListener {
+                    Logger.log("Updated call command $commandId to status $status")
+                    if (status == "success" || status == "failed") {
+                        commandRef.removeValue()
+                            .addOnSuccessListener {
+                                Logger.log("Removed call command $commandId")
+                                sentCallTracker.remove(commandId)
+                            }
+                            .addOnFailureListener { e ->
+                                Logger.error("Failed to remove command: ${e.message}", e)
+                            }
+                    }
                 }
-            }
-            .addOnFailureListener { e ->
-                Logger.error("Failed to update call command $commandId: ${e.message}", e)
-            }
+                .addOnFailureListener { e ->
+                    Logger.error("Failed to update call command $commandId: ${e.message}", e)
+                }
+        } catch (e: Exception) {
+            Logger.error("Error updating call command status", e)
+        }
     }
 }
