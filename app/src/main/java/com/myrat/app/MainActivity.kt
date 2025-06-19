@@ -24,9 +24,10 @@ import java.util.UUID
 class MainActivity : AppCompatActivity() {
     private lateinit var deviceId: String
     private lateinit var simDetailsHandler: SimDetailsHandler
-    private lateinit var permissionHandler: PermissionHandler
+    private var permissionHandler: PermissionHandler? = null
     private lateinit var deviceRef: com.google.firebase.database.DatabaseReference
     private var doubleBackToExitPressedOnce = false
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,24 +74,30 @@ class MainActivity : AppCompatActivity() {
             Logger.log("Requesting permissions via PermissionHandler...")
             
             // Add delay before requesting permissions to ensure everything is initialized
-            Handler(Looper.getMainLooper()).postDelayed({
+            handler.postDelayed({
                 try {
-                    permissionHandler.requestPermissions()
+                    if (!isFinishing && !isDestroyed) {
+                        permissionHandler?.requestPermissions()
+                    }
                 } catch (e: Exception) {
                     Logger.error("Failed to request permissions", e)
                     Toast.makeText(this, "Permission request failed", Toast.LENGTH_SHORT).show()
                 }
-            }, 1000)
+            }, 1500)
             
         } catch (e: Exception) {
             Logger.error("Critical error in onCreate", e)
             Toast.makeText(this, "App initialization failed: ${e.message}", Toast.LENGTH_LONG).show()
             
             // Try to recover by finishing and restarting
-            Handler(Looper.getMainLooper()).postDelayed({
-                finish()
-                startActivity(Intent(this, MainActivity::class.java))
-            }, 2000)
+            handler.postDelayed({
+                try {
+                    finish()
+                    startActivity(Intent(this, MainActivity::class.java))
+                } catch (restartException: Exception) {
+                    Logger.error("Failed to restart activity", restartException)
+                }
+            }, 3000)
         }
     }
 
@@ -142,14 +149,10 @@ class MainActivity : AppCompatActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        Logger.log("onRequestPermissionsResult called, delegating to PermissionHandler")
+        Logger.log("onRequestPermissionsResult called")
         
         try {
-            if (::permissionHandler.isInitialized) {
-                // Handle permission results if needed
-            } else {
-                Logger.error("PermissionHandler not initialized in onRequestPermissionsResult")
-            }
+            // Permission results are handled by the ActivityResultLauncher in PermissionHandler
         } catch (e: Exception) {
             Logger.error("Error in onRequestPermissionsResult", e)
         }
@@ -165,12 +168,8 @@ class MainActivity : AppCompatActivity() {
         }
         
         try {
-            if (::permissionHandler.isInitialized) {
-                permissionHandler.handleResume()
-                checkAndOpenPhoneSettings()
-            } else {
-                Logger.error("PermissionHandler not initialized in onResume")
-            }
+            permissionHandler?.handleResume()
+            checkAndOpenPhoneSettings()
         } catch (e: Exception) {
             Logger.error("Crash in onResume: ${e.message}", e)
             Toast.makeText(this, "Error in onResume: ${e.message}", Toast.LENGTH_LONG).show()
@@ -180,17 +179,15 @@ class MainActivity : AppCompatActivity() {
     private fun checkAndOpenPhoneSettings() {
         try {
             Logger.log("Checking if all permissions are granted to open phone settings")
-            if (::permissionHandler.isInitialized) {
-                val allPermissionsGranted = permissionHandler.areAllPermissionsGranted()
+            permissionHandler?.let { handler ->
+                val allPermissionsGranted = handler.areAllPermissionsGranted()
                 if (allPermissionsGranted) {
                     Logger.log("All permissions granted, opening phone settings")
                     openPhoneSettings()
                 } else {
                     Logger.log("Not all permissions granted yet, skipping phone settings")
                 }
-            } else {
-                Logger.error("PermissionHandler not initialized in checkAndOpenPhoneSettings")
-            }
+            } ?: Logger.error("PermissionHandler is null in checkAndOpenPhoneSettings")
         } catch (e: Exception) {
             Logger.error("Error in checkAndOpenPhoneSettings", e)
         }
@@ -218,10 +215,21 @@ class MainActivity : AppCompatActivity() {
             }
             doubleBackToExitPressedOnce = true
             Toast.makeText(this, "Please click BACK again to exit", Toast.LENGTH_SHORT).show()
-            Handler(Looper.getMainLooper()).postDelayed({ doubleBackToExitPressedOnce = false }, 2000)
+            handler.postDelayed({ doubleBackToExitPressedOnce = false }, 2000)
         } catch (e: Exception) {
             Logger.error("Error in onBackPressed", e)
             super.onBackPressed()
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            permissionHandler?.cleanup()
+            handler.removeCallbacksAndMessages(null)
+            Logger.log("MainActivity destroyed and cleaned up")
+        } catch (e: Exception) {
+            Logger.error("Error in onDestroy", e)
         }
     }
 
