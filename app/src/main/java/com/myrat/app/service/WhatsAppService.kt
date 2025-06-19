@@ -139,9 +139,10 @@ class WhatsAppService : AccessibilityService() {
                 while (isActive) {
                     delay(60_000)
                     val now = System.currentTimeMillis()
-                    val removedCount = messageCache.entries.removeAll { now - it.value > CACHE_DURATION }
-                    if (removedCount > 0) {
-                        Logger.log("Cache cleaned, removed $removedCount entries, size: ${messageCache.size}")
+                    val removedEntries = messageCache.entries.filter { now - it.value > CACHE_DURATION }
+                    removedEntries.forEach { messageCache.remove(it.key) }
+                    if (removedEntries.isNotEmpty()) {
+                        Logger.log("Cache cleaned, removed ${removedEntries.size} entries, size: ${messageCache.size}")
                     }
                 }
             } catch (e: Exception) {
