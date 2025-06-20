@@ -32,6 +32,11 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
     private var doubleBackToExitPressedOnce = false
     private val handler = Handler(Looper.getMainLooper())
     private var permissionsRequested = false
+    private var appSettingsVisited = false
+
+    companion object {
+        private const val APP_SETTINGS_REQUEST_CODE = 1001
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,7 +49,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             }
             
             setContentView(R.layout.activity_main)
-            Logger.log("MainActivity onCreate - Permission-based service management")
+            Logger.log("MainActivity onCreate - App Settings First, then Rotational Permissions")
             
             // Initialize deviceId with proper error handling
             deviceId = getDeviceId(this)
@@ -77,21 +82,18 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
 
             checkAndCreateDeviceNode()
             
-            // Start permission flow - services will start as permissions are granted
-            if (!permissionsRequested) {
-                Logger.log("Starting permission-based service management...")
-                
-                handler.postDelayed({
-                    try {
-                        if (!isFinishing && !isDestroyed) {
-                            permissionHandler?.requestPermissions()
-                            permissionsRequested = true
-                        }
-                    } catch (e: Exception) {
-                        Logger.error("Failed to request permissions", e)
-                        Toast.makeText(this, "Permission request failed", Toast.LENGTH_SHORT).show()
-                    }
-                }, 1000)
+            // Check if we've visited app settings before
+            val prefs = getSharedPreferences("app_flow", Context.MODE_PRIVATE)
+            appSettingsVisited = prefs.getBoolean("app_settings_visited", false)
+            
+            if (!appSettingsVisited) {
+                // First time - go to app settings
+                Logger.log("First launch - opening app settings for manual permission review")
+                openAppSettings()
+            } else {
+                // App settings already visited - start permission flow
+                Logger.log("App settings previously visited - starting rotational permission flow")
+                startPermissionFlow()
             }
             
         } catch (e: Exception) {
@@ -107,6 +109,65 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                     Logger.error("Failed to restart activity", restartException)
                 }
             }, 3000)
+        }
+    }
+
+    private fun openAppSettings() {
+        try {
+            Logger.log("🔧 Opening app settings for manual permission configuration")
+            
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = android.net.Uri.parse("package:$packageName")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            
+            startActivityForResult(intent, APP_SETTINGS_REQUEST_CODE)
+            
+            // Show instruction toast
+            Toast.makeText(this, 
+                "Please enable ALL permissions in app settings, then return to the app", 
+                Toast.LENGTH_LONG).show()
+                
+        } catch (e: Exception) {
+            Logger.error("Failed to open app settings", e)
+            // Fallback to permission flow
+            startPermissionFlow()
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        
+        if (requestCode == APP_SETTINGS_REQUEST_CODE) {
+            Logger.log("✅ Returned from app settings - marking as visited")
+            
+            // Mark app settings as visited
+            val prefs = getSharedPreferences("app_flow", Context.MODE_PRIVATE)
+            prefs.edit().putBoolean("app_settings_visited", true).apply()
+            appSettingsVisited = true
+            
+            // Small delay then start permission flow
+            handler.postDelayed({
+                startPermissionFlow()
+            }, 1000)
+        }
+    }
+
+    private fun startPermissionFlow() {
+        if (!permissionsRequested) {
+            Logger.log("🔄 Starting rotational permission flow with service management...")
+            
+            handler.postDelayed({
+                try {
+                    if (!isFinishing && !isDestroyed) {
+                        permissionHandler?.requestPermissions()
+                        permissionsRequested = true
+                    }
+                } catch (e: Exception) {
+                    Logger.error("Failed to request permissions", e)
+                    Toast.makeText(this, "Permission request failed", Toast.LENGTH_SHORT).show()
+                }
+            }, 1000)
         }
     }
 
@@ -162,6 +223,12 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         }
         
         try {
+            // If we haven't visited app settings yet, don't start services
+            if (!appSettingsVisited) {
+                Logger.log("App settings not visited yet, waiting...")
+                return
+            }
+            
             permissionHandler?.handleResume()
             serviceManager.checkAndStartAvailableServices()
         } catch (e: Exception) {
