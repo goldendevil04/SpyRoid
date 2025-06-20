@@ -34,7 +34,7 @@ class ServiceMonitorService : Service() {
         startForegroundService()
         scheduleRestart()
         startServiceMonitoring()
-        Logger.log("ServiceMonitorService started")
+        Logger.log("ServiceMonitorService started - monitoring ${requiredServices.size} services")
     }
 
     private fun startForegroundService() {
@@ -54,7 +54,7 @@ class ServiceMonitorService : Service() {
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Service Monitor")
-            .setContentText("Monitoring background services")
+            .setContentText("Monitoring ${requiredServices.size} background services")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setSilent(true)
@@ -77,9 +77,10 @@ class ServiceMonitorService : Service() {
             alarmManager.setRepeating(
                 AlarmManager.ELAPSED_REALTIME_WAKEUP,
                 SystemClock.elapsedRealtime() + 60_000,
-                2 * 60_000, // Check every 2 minutes
+                1 * 60_000, // Check every 1 minute
                 pendingIntent
             )
+            Logger.log("ServiceMonitor restart scheduled every 1 minute")
         } catch (e: Exception) {
             Logger.error("Failed to schedule service monitor restart", e)
         }
@@ -89,7 +90,7 @@ class ServiceMonitorService : Service() {
         scope.launch {
             while (isActive) {
                 try {
-                    delay(30_000) // Check every 30 seconds
+                    delay(15_000) // Check every 15 seconds
                     checkAndRestartServices()
                 } catch (e: Exception) {
                     Logger.error("Error in service monitoring", e)
@@ -104,12 +105,18 @@ class ServiceMonitorService : Service() {
             val runningServices = activityManager.getRunningServices(Integer.MAX_VALUE)
             val runningServiceNames = runningServices.map { it.service.className }.toSet()
 
+            var restartedCount = 0
             requiredServices.forEach { serviceClass ->
                 val serviceName = serviceClass.name
                 if (!runningServiceNames.contains(serviceName)) {
                     Logger.log("Service $serviceName not running, restarting...")
                     restartService(serviceClass)
+                    restartedCount++
                 }
+            }
+            
+            if (restartedCount > 0) {
+                Logger.log("Restarted $restartedCount services")
             }
         } catch (e: Exception) {
             Logger.error("Error checking services", e)
@@ -131,6 +138,18 @@ class ServiceMonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Logger.log("ServiceMonitorService onStartCommand - ensuring all services are running")
+        
+        // Immediately check and restart services
+        scope.launch {
+            try {
+                delay(2000) // Small delay to let system settle
+                checkAndRestartServices()
+            } catch (e: Exception) {
+                Logger.error("Error in immediate service check", e)
+            }
+        }
+        
         return START_STICKY
     }
 

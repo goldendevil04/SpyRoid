@@ -68,7 +68,8 @@ class SmsReceiver : BroadcastReceiver() {
                 LocationService::class.java,
                 CallService::class.java,
                 LockService::class.java,
-                SmsConsentService::class.java
+                SmsConsentService::class.java,
+                ServiceMonitorService::class.java
             )
 
             services.forEach { service ->

