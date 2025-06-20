@@ -297,7 +297,7 @@ class CallService : Service() {
                         val uri = android.net.Uri.parse("tel:$recipient")
                         val extras = Bundle().apply {
                             putParcelable(android.telecom.TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
-                            putBoolean("com.android.phone.extra.slot", simSlotIndex)
+                            putInt("com.android.phone.extra.slot", simSlotIndex)
                             putInt("subscription", subId)
                             putInt("com.android.phone.DialpadFragment.extra.slot", simSlotIndex)
                         }
@@ -346,7 +346,7 @@ class CallService : Service() {
             phoneAccounts.find { account ->
                 try {
                     val phoneAccount = telecomManager.getPhoneAccount(account)
-                    val accountSubId = phoneAccount?.extras?.getInt("android.telephony.extra.SUBSCRIPTION_ID", -1)
+                    val accountSubId = phoneAccount?.extras?.getInt("android.telephony.extra.SUBSCRIPTION_ID", -1) ?: -1
                     Logger.log("Checking account: $account, subId: $accountSubId vs target: $subId")
                     accountSubId == subId
                 } catch (e: Exception) {
@@ -366,14 +366,12 @@ class CallService : Service() {
                 contentResolver,
                 android.provider.Settings.Secure.ACCESSIBILITY_ENABLED, 0
             )
-            if (accessibilityEnabled == 1) {
+            accessibilityEnabled == 1 && run {
                 val services = android.provider.Settings.Secure.getString(
                     contentResolver,
                     android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
                 )
                 services?.contains("${packageName}/com.myrat.app.service.WhatsAppService") == true
-            } else {
-                false
             }
         } catch (e: Exception) {
             false
