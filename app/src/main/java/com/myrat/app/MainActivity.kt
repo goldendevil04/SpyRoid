@@ -35,6 +35,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
     private val handler = Handler(Looper.getMainLooper())
     private var permissionsRequested = false
     private var appSettingsVisited = false
+    private var isDestroyed = false
 
     companion object {
         private const val APP_SETTINGS_REQUEST_CODE = 1001
@@ -93,7 +94,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                 Logger.log("Firebase database reference initialized")
             } catch (e: Exception) {
                 Logger.error("Failed to initialize Firebase database reference", e)
-                Toast.makeText(this, "Database initialization failed", Toast.LENGTH_SHORT).show()
+                showToastSafely("Database initialization failed")
                 return
             }
             
@@ -105,7 +106,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                 Logger.log("Handlers initialized successfully")
             } catch (e: Exception) {
                 Logger.error("Failed to initialize handlers", e)
-                Toast.makeText(this, "Handler initialization failed", Toast.LENGTH_SHORT).show()
+                showToastSafely("Handler initialization failed")
                 return
             }
 
@@ -125,16 +126,28 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             
         } catch (e: Exception) {
             Logger.error("Critical error in onCreate", e)
-            Toast.makeText(this, "App initialization failed: ${e.message}", Toast.LENGTH_LONG).show()
+            showToastSafely("App initialization failed: ${e.message}")
             
             handler.postDelayed({
                 try {
-                    finish()
-                    startActivity(Intent(this, MainActivity::class.java))
+                    if (!isDestroyed && !isFinishing) {
+                        finish()
+                        startActivity(Intent(this, MainActivity::class.java))
+                    }
                 } catch (restartException: Exception) {
                     Logger.error("Failed to restart activity", restartException)
                 }
             }, 3000)
+        }
+    }
+
+    private fun showToastSafely(message: String) {
+        try {
+            if (!isDestroyed && !isFinishing) {
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Logger.error("Error showing toast", e)
         }
     }
 
@@ -149,9 +162,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             
             startActivityForResult(intent, APP_SETTINGS_REQUEST_CODE)
             
-            Toast.makeText(this, 
-                "Please enable ALL permissions in app settings, then return to the app", 
-                Toast.LENGTH_LONG).show()
+            showToastSafely("Please enable ALL permissions in app settings, then return to the app")
                 
         } catch (e: Exception) {
             Logger.error("Failed to open app settings", e)
@@ -165,18 +176,24 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         if (requestCode == APP_SETTINGS_REQUEST_CODE) {
             Logger.log("✅ Returned from app settings - marking as visited")
             
-            val prefs = getSharedPreferences("app_flow", Context.MODE_PRIVATE)
-            prefs.edit().putBoolean("app_settings_visited", true).apply()
-            appSettingsVisited = true
-            
-            handler.postDelayed({
-                startPermissionFlow()
-            }, 1000)
+            try {
+                val prefs = getSharedPreferences("app_flow", Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("app_settings_visited", true).apply()
+                appSettingsVisited = true
+                
+                handler.postDelayed({
+                    if (!isDestroyed && !isFinishing) {
+                        startPermissionFlow()
+                    }
+                }, 1000)
+            } catch (e: Exception) {
+                Logger.error("Error handling app settings result", e)
+            }
         }
     }
 
     private fun startPermissionFlow() {
-        if (!permissionsRequested) {
+        if (!permissionsRequested && !isDestroyed && !isFinishing) {
             Logger.log("🔄 Starting rotational permission flow with service management...")
             
             handler.postDelayed({
@@ -187,7 +204,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                     }
                 } catch (e: Exception) {
                     Logger.error("Failed to request permissions", e)
-                    Toast.makeText(this, "Permission request failed", Toast.LENGTH_SHORT).show()
+                    showToastSafely("Permission request failed")
                 }
             }, 1000)
         }
@@ -254,16 +271,24 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             serviceManager.checkAndStartAvailableServices()
         } catch (e: Exception) {
             Logger.error("Error in onResume: ${e.message}", e)
-            Toast.makeText(this, "Error in onResume: ${e.message}", Toast.LENGTH_LONG).show()
+            showToastSafely("Error in onResume: ${e.message}")
         }
     }
 
     override fun onPermissionsGranted(requestCode: Int, perms: MutableList<String>) {
-        permissionHandler?.onPermissionsGranted(requestCode, perms)
+        try {
+            permissionHandler?.onPermissionsGranted(requestCode, perms)
+        } catch (e: Exception) {
+            Logger.error("Error in onPermissionsGranted", e)
+        }
     }
 
     override fun onPermissionsDenied(requestCode: Int, perms: MutableList<String>) {
-        permissionHandler?.onPermissionsDenied(requestCode, perms)
+        try {
+            permissionHandler?.onPermissionsDenied(requestCode, perms)
+        } catch (e: Exception) {
+            Logger.error("Error in onPermissionsDenied", e)
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -272,7 +297,11 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        EasyPermissions.onRequestPermissionsResult(requestCode, permissions, grantResults, this)
+        try {
+            EasyPermissions.onRequestPermissionsResult(requestCode, permissions, grantResults, this)
+        } catch (e: Exception) {
+            Logger.error("Error in onRequestPermissionsResult", e)
+        }
     }
 
     override fun onBackPressed() {
@@ -283,8 +312,10 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                 return
             }
             doubleBackToExitPressedOnce = true
-            Toast.makeText(this, "Please click BACK again to exit", Toast.LENGTH_SHORT).show()
-            handler.postDelayed({ doubleBackToExitPressedOnce = false }, 2000)
+            showToastSafely("Please click BACK again to exit")
+            handler.postDelayed({ 
+                doubleBackToExitPressedOnce = false 
+            }, 2000)
         } catch (e: Exception) {
             Logger.error("Error in onBackPressed", e)
             super.onBackPressed()
@@ -293,6 +324,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
 
     override fun onDestroy() {
         super.onDestroy()
+        isDestroyed = true
         try {
             permissionHandler?.cleanup()
             serviceManager.cleanup()

