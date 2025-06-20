@@ -19,9 +19,10 @@ import com.google.firebase.ktx.Firebase
 import com.myrat.app.handler.PermissionHandler
 import com.myrat.app.handler.SimDetailsHandler
 import com.myrat.app.utils.Logger
+import pub.devrel.easypermissions.EasyPermissions
 import java.util.UUID
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
     private lateinit var deviceId: String
     private lateinit var simDetailsHandler: SimDetailsHandler
     private var permissionHandler: PermissionHandler? = null
@@ -75,7 +76,7 @@ class MainActivity : AppCompatActivity() {
             
             // Only request permissions once
             if (!permissionsRequested) {
-                Logger.log("Requesting permissions via PermissionHandler...")
+                Logger.log("Requesting permissions via EasyPermissions...")
                 
                 // Add delay before requesting permissions to ensure everything is initialized
                 handler.postDelayed({
@@ -226,6 +227,24 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Logger.error("Error in onDestroy", e)
         }
+    }
+
+    // EasyPermissions callbacks
+    override fun onPermissionsGranted(requestCode: Int, perms: MutableList<String>) {
+        permissionHandler?.onPermissionsGranted(requestCode, perms)
+    }
+
+    override fun onPermissionsDenied(requestCode: Int, perms: MutableList<String>) {
+        permissionHandler?.onPermissionsDenied(requestCode, perms)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        EasyPermissions.onRequestPermissionsResult(requestCode, permissions, grantResults, this)
     }
 
     companion object {

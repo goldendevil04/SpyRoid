@@ -63,9 +63,6 @@ dependencies {
     implementation ("com.google.android.gms:play-services-location:21.3.0")
     implementation ("androidx.biometric:biometric:1.1.0")
     
-    // PermissionX for modern permission handling
-    implementation ("com.guolindev.permissionx:permissionx:1.8.1")
-    
-    //webrtc
-//    implementation ("org.webrtc:google-webrtc:1.0.1")
+    // EasyPermissions for reliable permission handling
+    implementation ("pub.devrel:easypermissions:3.0.0")
 }
