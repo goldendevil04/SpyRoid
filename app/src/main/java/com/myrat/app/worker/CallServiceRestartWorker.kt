@@ -25,13 +25,18 @@ class CallServiceRestartWorker(context: Context, params: WorkerParameters) : Wor
                 Logger.log("📞 CallService not running, restarting...")
                 
                 val intent = Intent(applicationContext, CallService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    applicationContext.startForegroundService(intent)
-                } else {
-                    applicationContext.startService(intent)
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        applicationContext.startForegroundService(intent)
+                    } else {
+                        applicationContext.startService(intent)
+                    }
+                    
+                    Logger.log("✅ CallService restart initiated via WorkManager")
+                } catch (e: Exception) {
+                    Logger.error("❌ Failed to start CallService", e)
+                    return Result.retry()
                 }
-                
-                Logger.log("✅ CallService restart initiated via WorkManager")
             } else {
                 Logger.log("✅ CallService is already running")
             }

