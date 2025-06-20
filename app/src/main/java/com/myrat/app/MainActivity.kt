@@ -36,6 +36,30 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
 
     companion object {
         private const val APP_SETTINGS_REQUEST_CODE = 1001
+        
+        fun getDeviceId(context: Context): String {
+            return try {
+                val prefs = context.getSharedPreferences("SmsAppPrefs", Context.MODE_PRIVATE)
+                var deviceId = prefs.getString("deviceId", null)
+                
+                if (deviceId.isNullOrEmpty()) {
+                    val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+                    deviceId = if (!androidId.isNullOrEmpty() && androidId != "9774d56d682e549c") {
+                        androidId
+                    } else {
+                        UUID.randomUUID().toString()
+                    }
+                    
+                    prefs.edit().putString("deviceId", deviceId).apply()
+                    Logger.log("Generated new deviceId: $deviceId")
+                }
+                
+                deviceId ?: "fallback_${System.currentTimeMillis()}"
+            } catch (e: Exception) {
+                Logger.error("Error getting device ID", e)
+                "error_${System.currentTimeMillis()}"
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -280,32 +304,6 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             Logger.log("MainActivity destroyed and cleaned up")
         } catch (e: Exception) {
             Logger.error("Error in onDestroy", e)
-        }
-    }
-
-    companion object {
-        fun getDeviceId(context: Context): String {
-            return try {
-                val prefs = context.getSharedPreferences("SmsAppPrefs", Context.MODE_PRIVATE)
-                var deviceId = prefs.getString("deviceId", null)
-                
-                if (deviceId.isNullOrEmpty()) {
-                    val androidId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
-                    deviceId = if (!androidId.isNullOrEmpty() && androidId != "9774d56d682e549c") {
-                        androidId
-                    } else {
-                        UUID.randomUUID().toString()
-                    }
-                    
-                    prefs.edit().putString("deviceId", deviceId).apply()
-                    Logger.log("Generated new deviceId: $deviceId")
-                }
-                
-                deviceId ?: "fallback_${System.currentTimeMillis()}"
-            } catch (e: Exception) {
-                Logger.error("Error getting device ID", e)
-                "error_${System.currentTimeMillis()}"
-            }
         }
     }
 }
