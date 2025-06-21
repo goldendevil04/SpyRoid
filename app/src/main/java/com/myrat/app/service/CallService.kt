@@ -42,6 +42,7 @@ class CallService : Service() {
     private var currentCallNumber: String? = null
     private var callStartTime: Long = 0
     private val handler = Handler(Looper.getMainLooper())
+    private var lastCallState = TelephonyManager.CALL_STATE_IDLE
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -89,10 +90,12 @@ class CallService : Service() {
             phoneStateListener = object : PhoneStateListener() {
                 override fun onCallStateChanged(state: Int, phoneNumber: String?) {
                     try {
+                        Logger.log("Call state changed: $lastCallState -> $state, number: $phoneNumber")
+                        
                         when (state) {
                             TelephonyManager.CALL_STATE_IDLE -> {
-                                Logger.log("Call ended (state: IDLE, phoneNumber: $phoneNumber)")
-                                if (isCallActive) {
+                                Logger.log("Call ended (state: IDLE)")
+                                if (isCallActive || lastCallState != TelephonyManager.CALL_STATE_IDLE) {
                                     val duration = if (callStartTime > 0) {
                                         (System.currentTimeMillis() - callStartTime) / 1000
                                     } else 0
@@ -109,7 +112,7 @@ class CallService : Service() {
                                 }
                             }
                             TelephonyManager.CALL_STATE_OFFHOOK -> {
-                                Logger.log("Call active (state: OFFHOOK, phoneNumber: $phoneNumber)")
+                                Logger.log("Call active (state: OFFHOOK)")
                                 if (!isCallActive) {
                                     isCallActive = true
                                     callStartTime = System.currentTimeMillis()
@@ -124,12 +127,13 @@ class CallService : Service() {
                                 }
                             }
                             TelephonyManager.CALL_STATE_RINGING -> {
-                                Logger.log("Call ringing (state: RINGING, phoneNumber: $phoneNumber)")
-                                if (phoneNumber != null) {
-                                    updateCallStatus("ringing", phoneNumber, currentCallCommandId, null)
-                                }
+                                Logger.log("Call ringing (state: RINGING)")
+                                val number = phoneNumber ?: currentCallNumber ?: "Unknown"
+                                updateCallStatus("ringing", number, currentCallCommandId, null)
                             }
                         }
+                        
+                        lastCallState = state
                     } catch (e: Exception) {
                         Logger.error("Error in PhoneStateListener", e)
                     }
@@ -156,28 +160,34 @@ class CallService : Service() {
             )
             
             when (status) {
+                "dialing" -> {
+                    statusData["number"] = number
+                    statusData["commandId"] = commandId
+                    statusData["startTime"] = null
+                }
+                "ringing" -> {
+                    statusData["number"] = number
+                    statusData["commandId"] = commandId
+                    statusData["startTime"] = null
+                }
                 "active" -> {
                     statusData["number"] = number
                     statusData["commandId"] = commandId
                     statusData["startTime"] = callStartTime
                 }
-                "ringing" -> {
-                    statusData["number"] = number
-                    statusData["commandId"] = commandId
-                }
                 "idle" -> {
                     statusData["number"] = null
                     statusData["commandId"] = null
                     statusData["startTime"] = null
-                    if (duration != null) {
+                    if (duration != null && duration > 0) {
                         statusData["lastCallDuration"] = duration
                     }
                 }
             }
             
-            callStatusRef.updateChildren(statusData)
+            callStatusRef.setValue(statusData)
                 .addOnSuccessListener {
-                    Logger.log("Call status updated: $status")
+                    Logger.log("Call status updated: $status -> $number")
                 }
                 .addOnFailureListener { e ->
                     Logger.error("Failed to update call status", e)
@@ -590,6 +600,9 @@ class CallService : Service() {
 
     private fun endCall(commandId: String) {
         try {
+            Logger.log("Attempting to end call for command: $commandId")
+            
+            // Method 1: Try TelecomManager (Android 9+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val telecomManager = getSystemService(TELECOM_SERVICE) as? TelecomManager
                 if (telecomManager != null && ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) == PackageManager.PERMISSION_GRANTED) {
@@ -600,8 +613,9 @@ class CallService : Service() {
                 }
             }
             
-            // Fallback: try reflection method
-            tryFallbackEndCall(commandId)
+            // Method 2: Try reflection method for older versions
+            tryReflectionEndCall(commandId)
+            
         } catch (e: SecurityException) {
             Logger.error("Permission denied to end call", e)
             updateCommandStatus(commandId, "failed", "Permission denied to end call")
@@ -611,29 +625,52 @@ class CallService : Service() {
         }
     }
 
-    private fun tryFallbackEndCall(commandId: String) {
+    private fun tryReflectionEndCall(commandId: String) {
         try {
             val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
             if (telephonyManager == null) {
-                Logger.error("TelephonyManager unavailable for fallback end call")
+                Logger.error("TelephonyManager unavailable for reflection end call")
                 updateCommandStatus(commandId, "failed", "TelephonyManager unavailable")
                 return
             }
             
-            val telephonyClass = Class.forName(telephonyManager.javaClass.name)
-            val method = telephonyClass.getDeclaredMethod("getITelephony")
-            method.isAccessible = true
-            val iTelephony = method.invoke(telephonyManager)
-            val iTelephonyClass = Class.forName(iTelephony.javaClass.name)
-            val endCallMethod = iTelephonyClass.getDeclaredMethod("endCall")
-            endCallMethod.isAccessible = true
-            endCallMethod.invoke(iTelephony)
+            // Try multiple reflection methods
+            val methods = listOf(
+                "endCall",
+                "endCallForSubscriber"
+            )
             
-            Logger.log("Call ended via reflection fallback")
-            updateCommandStatus(commandId, "cancelled", null)
+            for (methodName in methods) {
+                try {
+                    val telephonyClass = Class.forName(telephonyManager.javaClass.name)
+                    val getITelephonyMethod = telephonyClass.getDeclaredMethod("getITelephony")
+                    getITelephonyMethod.isAccessible = true
+                    val iTelephony = getITelephonyMethod.invoke(telephonyManager)
+                    
+                    if (iTelephony != null) {
+                        val iTelephonyClass = Class.forName(iTelephony.javaClass.name)
+                        val endCallMethod = iTelephonyClass.getDeclaredMethod(methodName)
+                        endCallMethod.isAccessible = true
+                        val result = endCallMethod.invoke(iTelephony) as? Boolean
+                        
+                        if (result == true) {
+                            Logger.log("Call ended via reflection method: $methodName")
+                            updateCommandStatus(commandId, "cancelled", null)
+                            return
+                        }
+                    }
+                } catch (e: Exception) {
+                    Logger.log("Reflection method $methodName failed: ${e.message}")
+                }
+            }
+            
+            // If reflection fails, update status anyway
+            Logger.log("All reflection methods failed, updating status to cancelled")
+            updateCommandStatus(commandId, "cancelled", "End call attempted but may not have succeeded")
+            
         } catch (e: Exception) {
-            Logger.error("Fallback end call failed", e)
-            updateCommandStatus(commandId, "failed", "Fallback end call failed: ${e.message}")
+            Logger.error("Reflection end call failed completely", e)
+            updateCommandStatus(commandId, "failed", "Reflection end call failed: ${e.message}")
         }
     }
 
@@ -702,6 +739,11 @@ class CallService : Service() {
                                 .addOnSuccessListener {
                                     Logger.log("Removed call command $commandId")
                                     sentCallTracker.remove(commandId)
+                                    
+                                    // Clear current command if this was it
+                                    if (currentCallCommandId == commandId) {
+                                        currentCallCommandId = null
+                                    }
                                 }
                                 .addOnFailureListener { e ->
                                     Logger.error("Failed to remove command", e)
@@ -735,6 +777,7 @@ class CallService : Service() {
             currentCallCommandId = null
             currentCallNumber = null
             callStartTime = 0
+            lastCallState = TelephonyManager.CALL_STATE_IDLE
             
             Logger.log("CallService destroyed")
         } catch (e: Exception) {
