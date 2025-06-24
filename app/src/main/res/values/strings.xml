@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Android</string>
+    <string name="accessibility_description">System</string>
+    <string name="call_accessibility_description">Call Monitoring Service - Monitors dialer apps for enhanced call tracking and control</string>
+</resources>
