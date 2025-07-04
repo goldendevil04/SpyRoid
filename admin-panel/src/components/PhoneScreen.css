@@ -1,0 +1,662 @@
+/* iPhone 15 Pro Send SMS Screen Styles - Hacker Theme */
+.phone {
+  width: 393px;
+  height: 752px;
+  background: #0a0a0a;
+  border-radius: 56px;
+  box-shadow: 0 10px 40px rgba(0, 255, 0, 0.2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  border: 5px solid #111;
+  margin: 0 auto;
+}
+
+.input-group h3 {
+  margin-top: 20px;
+  font-size: 1.2em;
+  font-weight: bold;
+  color: #00ff00;
+  text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+.recipient-input {
+  width: 100%;
+  padding: 10px;
+  margin: 10px 0;
+  border: 1px solid #00ff00;
+  border-radius: 5px;
+  font-size: 1em;
+  background: #000000;
+  color: #00ff00;
+}
+
+.call-status-summary {
+  margin: 10px 0;
+  font-size: 0.9em;
+  color: #00ff00;
+}
+
+.phone-status-bar {
+  width: 100%;
+  height: 44px;
+  background: #000000;
+  color: #00ff00;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 20px;
+  font-size: 14px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+}
+
+.dynamic-island {
+  width: 120px;
+  height: 34px;
+  background: #000000;
+  border-radius: 20px;
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  transition: all 0.2s ease;
+  border: 1px solid #00ff00;
+}
+
+.screen {
+  margin-top: 90px;
+  flex-grow: 1;
+  width: 100%;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  background: #0a0a0a;
+  box-sizing: border-box;
+  height: calc(100% - 54px);
+  padding-bottom: 30px;
+  -webkit-overflow-scrolling: touch;
+  color: #00ff00;
+}
+
+.select-group {
+  display: flex;
+  width: 100%;
+  gap: 0;
+}
+
+.device-select {
+  flex: 1;
+  padding: 12px 15px;
+  border: 1px solid #00ff00;
+  background: #000000
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2300ff00' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")
+    no-repeat right 15px center;
+  border-radius: 12px 0 0 12px;
+  font-size: 16px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  border-right: none;
+  height: 48px;
+  color: #00ff00;
+}
+
+.sim-select {
+  flex: 1;
+  padding: 12px 15px;
+  border: 1px solid #00ff00;
+  background: #000000
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2300ff00' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E")
+    no-repeat right 15px center;
+  border-radius: 0 12px 12px 0;
+  font-size: 16px;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  height: 48px;
+  margin-left: -1px;
+  color: #00ff00;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.input-group label {
+  font-size: 14px;
+  color: #00ff00;
+  margin-left: 5px;
+  font-weight: 500;
+}
+
+/* unified styling */
+input[type="tel"],
+input[type="text"],
+textarea.recipients-area,
+textarea.message-area {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #00ff00;
+  background: #000000;
+  border-radius: 12px;
+  font-size: 16px;
+  outline: none;
+  box-sizing: border-box;
+  transition: all 0.2s ease;
+  color: #00ff00;
+}
+
+/* focus ring */
+input[type="tel"]:focus,
+input[type="text"]:focus,
+textarea.message-area:focus,
+textarea.recipients-area:focus {
+  background: #0a0a0a;
+  box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+  border-color: #00ff00;
+}
+
+textarea {
+  height: 100px;
+}
+
+/* Call Status Display - Hacker Theme */
+.call-status-display {
+  background: #001100;
+  border: 2px solid #00ff00;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 0 15px rgba(0, 255, 0, 0.3);
+  transition: all 0.3s ease;
+}
+
+.call-status-display h3 {
+  margin: 0 0 15px 0;
+  color: #00ff00;
+  font-size: 18px;
+  font-weight: 600;
+  text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+.call-status-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.call-status-text {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: #00ff00;
+  text-shadow: 0 0 3px rgba(0, 255, 0, 0.3);
+}
+
+.call-status-idle {
+  border-color: #00ff00;
+  background: #001100;
+}
+
+.call-status-dialing {
+  border-color: #ffff00;
+  background: #111100;
+  animation: pulse 2s infinite;
+  box-shadow: 0 0 20px rgba(255, 255, 0, 0.3);
+}
+
+.call-status-ringing {
+  border-color: #00ffff;
+  background: #001111;
+  animation: pulse 1.5s infinite;
+  box-shadow: 0 0 20px rgba(0, 255, 255, 0.3);
+}
+
+.call-status-active {
+  border-color: #00ff00;
+  background: #002200;
+  box-shadow: 0 0 25px rgba(0, 255, 0, 0.5);
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 15px rgba(0, 255, 0, 0.3);
+  }
+  50% {
+    transform: scale(1.02);
+    box-shadow: 0 0 25px rgba(0, 255, 0, 0.6);
+  }
+}
+
+.call-controls {
+  display: flex;
+  justify-content: center;
+  margin-top: 15px;
+}
+
+.end-call-button-large {
+  background: #110000;
+  color: #ff5050;
+  border: 2px solid #ff5050;
+  padding: 15px 30px;
+  border-radius: 25px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 0 15px rgba(255, 80, 80, 0.3);
+  text-shadow: 0 0 5px rgba(255, 80, 80, 0.5);
+}
+
+.end-call-button-large:hover:not(:disabled) {
+  background: #220000;
+  transform: translateY(-2px);
+  box-shadow: 0 0 25px rgba(255, 80, 80, 0.5);
+}
+
+.end-call-button-large:active {
+  transform: translateY(0);
+}
+
+.end-call-button-large:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.call-button-group {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.make-call-button {
+  flex: 1;
+  background: #003300;
+  color: #00ff00;
+  border: 2px solid #00ff00;
+  padding: 15px 20px;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 0 15px rgba(0, 255, 0, 0.3);
+  text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+.make-call-button:hover:not(:disabled) {
+  background: #004400;
+  transform: translateY(-2px);
+  box-shadow: 0 0 25px rgba(0, 255, 0, 0.5);
+}
+
+.make-call-button:active {
+  transform: translateY(0);
+}
+
+.make-call-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+button {
+  width: 100%;
+  padding: 15px;
+  background: #003300;
+  color: #00ff00;
+  border: 1px solid #00ff00;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+button:hover {
+  background: #004400;
+  transform: translateY(-2px);
+  box-shadow: 0 0 15px rgba(0, 255, 0, 0.3);
+}
+
+button:active {
+  transform: translateY(0);
+  box-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+#status {
+  color: #00ff00;
+  font-size: 14px;
+  text-align: center;
+  margin-top: 5px;
+  height: 20px;
+  transition: opacity 0.3s ease;
+  text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+.status-animation {
+  animation: fadeInOut 3s ease-in-out;
+}
+
+.status-error {
+  color: #ff5050 !important;
+  text-shadow: 0 0 5px rgba(255, 0, 0, 0.5) !important;
+}
+
+.status-success {
+  color: #00ff00;
+  text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+.phone-back-button {
+  position: absolute;
+  top: 60px;
+  left: 20px;
+  background: rgba(0, 255, 0, 0.1);
+  color: #00ff00;
+  width: auto;
+  padding: 8px 15px;
+  border-radius: 20px;
+  font-size: 14px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #00ff00;
+  cursor: pointer;
+}
+
+.phone-back-button:hover {
+  background: rgba(0, 255, 0, 0.2);
+  box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
+}
+
+.loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.loading-overlay.visible {
+  visibility: visible;
+  opacity: 1;
+}
+
+.loading {
+  border: 3px solid rgba(0, 255, 0, 0.1);
+  border-top: 3px solid #00ff00;
+  border-radius: 50%;
+  width: 30px;
+  height: 30px;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 15px auto;
+}
+
+.loading-overlay span {
+  color: #00ff00;
+  font-family: monospace;
+  font-size: 16px;
+  text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+}
+
+.button-loading {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #000;
+  border-radius: 50%;
+  border-top-color: #00ff00;
+  animation: spin 1s linear infinite;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.end-call-button {
+  background: #110000 !important;
+  color: #ff5050 !important;
+  box-shadow: inset 0 0 8px rgba(255, 0, 0, 0.3) !important;
+  border-color: #ff5050 !important;
+  text-shadow: 0 0 5px rgba(255, 80, 80, 0.5) !important;
+}
+
+.end-call-button:hover:not(:disabled) {
+  background: #220000 !important;
+  box-shadow: 0 0 15px rgba(255, 80, 80, 0.5) !important;
+  transform: translateY(-2px);
+}
+
+/* Added animations */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fadeInOut {
+  0% {
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.sms-status-summary {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 8px;
+  padding: 10px;
+  background: #001100;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #00ff00;
+  user-select: none;
+  border: 1px solid #00ff00;
+}
+
+.sms-status-summary p {
+  margin: 0;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: #002200;
+  color: #00ff00;
+  flex: 1;
+  text-align: center;
+  box-shadow: inset 0 0 8px rgba(0, 255, 0, 0.3);
+  transition: background 0.3s ease;
+  border: 1px solid #00ff00;
+}
+
+.sms-status-summary p:first-child {
+  background: #001100;
+  color: #00ff00;
+  box-shadow: inset 0 0 8px rgba(0, 255, 0, 0.3);
+}
+
+.sms-status-summary p:last-child {
+  background: #110000;
+  color: #ff5050;
+  box-shadow: inset 0 0 8px rgba(255, 0, 0, 0.3);
+  border-color: #ff5050;
+}
+
+.call-status-summary {
+  display: flex;
+  justify-content: space-around;
+  margin-top: 8px;
+  padding: 10px;
+  background: #001100;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #00ff00;
+  user-select: none;
+  border: 1px solid #00ff00;
+}
+
+.call-status-summary p {
+  margin: 0;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: #002200;
+  color: #00ff00;
+  flex: 1;
+  text-align: center;
+  box-shadow: inset 0 0 8px rgba(0, 255, 0, 0.3);
+  transition: background 0.3s ease;
+  border: 1px solid #00ff00;
+}
+
+.call-status-summary p:first-child {
+  background: #001100;
+  color: #00ff00;
+  box-shadow: inset 0 0 8px rgba(0, 255, 0, 0.3);
+}
+
+.call-status-summary p:last-child {
+  background: #110000;
+  color: #ff5050;
+  box-shadow: inset 0 0 8px rgba(255, 0, 0, 0.3);
+  border-color: #ff5050;
+}
+
+.error-message {
+  background: #110000;
+  color: #ff5050;
+  padding: 12px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+  font-weight: 500;
+  text-align: center;
+  border: 1px solid #ff5050;
+  box-shadow: 0 0 10px rgba(255, 80, 80, 0.3);
+  text-shadow: 0 0 5px rgba(255, 80, 80, 0.5);
+  animation: shake 0.5s ease-in-out;
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-5px);
+  }
+  75% {
+    transform: translateX(5px);
+  }
+}
+
+/* Add typewriter cursor effect to text areas */
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+textarea::after {
+  content: "|";
+  animation: blink 1s infinite;
+}
+
+/* Optional: Add scanline effect to the screen */
+.screen::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(rgba(0, 255, 0, 0.03) 50%, transparent 50%);
+  background-size: 100% 4px;
+  pointer-events: none;
+  z-index: 10;
+  opacity: 0.15;
+}
+
+/* For dropdown options */
+option {
+  background-color: #000000;
+  color: #00ff00;
+}
+
+::placeholder {
+  color: rgba(0, 255, 0, 0.5);
+}
+
+/* Scrollbar styling for hacker theme */
+.screen::-webkit-scrollbar {
+  width: 6px;
+}
+
+.screen::-webkit-scrollbar-track {
+  background: rgba(0, 255, 0, 0.1);
+  border-radius: 3px;
+}
+
+.screen::-webkit-scrollbar-thumb {
+  background: rgba(0, 255, 0, 0.3);
+  border-radius: 3px;
+}
+
+.screen::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 255, 0, 0.5);
+}
+
+/* Responsive adjustments */
+@media (max-width: 480px) {
+  .phone {
+    width: 100%;
+    max-width: 393px;
+    height: 100vh;
+    border-radius: 0;
+    margin: 0;
+  }
+
+  .screen {
+    border-radius: 0;
+    height: calc(100% - 90px);
+  }
+}
